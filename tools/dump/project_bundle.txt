@@ -13,501 +13,8 @@ docker compose down
 docker compose build --no-cache --pull
 docker compose up
 
-# backend/Dockerfile
-# Node webapp: API + static frontend. Forced linux/amd64 for Windows Docker Desktop.
-FROM --platform=linux/amd64 node:20-alpine
-
-WORKDIR /app
-
-COPY backend/package.json ./backend/package.json
-RUN cd backend && npm install --no-fund --no-audit
-
-COPY backend/src ./backend/src
-COPY frontend ./frontend
-
-EXPOSE 3000
-CMD ["node", "backend/src/index.js"]
-
-# backend/package.json
-{
-  "name": "restaurant-menu-trainer",
-  "private": true,
-  "version": "1.0.0",
-  "main": "src/index.js",
-  "type": "commonjs",
-  "scripts": {
-    "start": "node src/index.js"
-  },
-  "dependencies": {
-    "express": "^4.19.2",
-    "multer": "^1.4.5-lts.1",
-    "mysql2": "^3.11.0"
-  }
-}
-
-# backend/src/api/dishes/getList.js
-/**
- * GET /api/dishes?section=<slug> -> dish cards
- */
-const { normalizeSlug, toMenuTable } = require("../../domain/sections/slug");
-
-async function handle(req, res, deps) {
-  const slug = normalizeSlug(req.query?.section);
-  if (!slug) return res.status(400).json({ error: "section is required" });
-
-  const table = toMenuTable(slug);
-
-  const [rows] = await deps.pool.query(
-    `SELECT id, name, image_path, ingredients, choices, created_at
-     FROM \`${table}\` ORDER BY id DESC LIMIT 200`
-  );
-
-  const base = deps.env.baseUrl || "";
-  res.json(
-    rows.map((r) => ({
-      id: r.id,
-      name: r.name,
-      imageUrl: `${base}/uploads/${r.image_path}`,
-      ingredients: r.ingredients || [],
-      choices: r.choices || [],
-      createdAt: r.created_at,
-    }))
-  );
-}
-
-function registerDishesListGet(app, deps) {
-  app.get("/api/dishes", (req, res, next) => handle(req, res, deps).catch(next));
-}
-
-module.exports = { registerDishesListGet };
-
-# backend/src/api/dishes/postCreate.js
-/**
- * POST /api/dishes (multipart/form-data)
- * Fields: section, name, ingredients, choices, image
- */
-const path = require("path");
-const { createImageUpload } = require("../../infra/storage/imageUpload");
-const { normalizeSlug, toMenuTable } = require("../../domain/sections/slug");
-const { parseLines } = require("../../domain/dishes/parseLines");
-
-function registerDishesCreatePost(app, deps) {
-  const upload = createImageUpload(deps.env.uploadDir).single("image");
-
-  app.post("/api/dishes", (req, res, next) =>
-    upload(req, res, (err) => {
-      if (err) return next(err);
-      handle(req, res, deps).catch(next);
-    })
-  );
-}
-
-async function handle(req, res, deps) {
-  const section = normalizeSlug(req.body?.section);
-  if (!section) return res.status(400).json({ error: "section is required" });
-
-  const name = String(req.body?.name || "").trim().slice(0, 160);
-  if (!name) return res.status(400).json({ error: "name is required" });
-
-  if (!req.file) return res.status(400).json({ error: "image is required" });
-
-  const ingredients = parseLines(req.body?.ingredients);
-  const choices = parseLines(req.body?.choices);
-
-  const table = toMenuTable(section);
-
-  await deps.pool.query(
-    `INSERT INTO \`${table}\` (name, image_path, ingredients, choices)
-     VALUES (?, ?, CAST(? AS JSON), CAST(? AS JSON))`,
-    [name, path.basename(req.file.filename), JSON.stringify(ingredients), JSON.stringify(choices)]
-  );
-
-  res.status(201).json({ ok: true });
-}
-
-module.exports = { registerDishesCreatePost };
-
-# backend/src/api/health/get.js
-/**
- * GET /api/health -> { ok: true }
- */
-function registerHealthGet(app) {
-  app.get("/api/health", (req, res) => res.json({ ok: true }));
-}
-
-module.exports = { registerHealthGet };
-
-# backend/src/api/sections/getList.js
-/**
- * GET /api/sections -> [{id,title,slug}]
- */
-async function handle(req, res, deps) {
-  const [rows] = await deps.pool.query(
-    "SELECT id, title, slug FROM sections ORDER BY id ASC"
-  );
-  res.json(rows);
-}
-
-function registerSectionsListGet(app, deps) {
-  app.get("/api/sections", (req, res, next) =>
-    handle(req, res, deps).catch(next)
-  );
-}
-
-module.exports = { registerSectionsListGet };
-
-# backend/src/api/sections/postCreate.js
-/**
- * POST /api/sections { title, slug? } -> created section
- * Also creates the menu_<slug> table.
- */
-const { normalizeSlug, toMenuTable } = require("../../domain/sections/slug");
-
-async function handle(req, res, deps) {
-  const title = String(req.body?.title || "").trim().slice(0, 120);
-  const slug = normalizeSlug(req.body?.slug || title);
-
-  if (!title) return res.status(400).json({ error: "title is required" });
-  if (!slug) return res.status(400).json({ error: "slug is invalid" });
-
-  await deps.pool.query("INSERT INTO sections (title, slug) VALUES (?, ?)", [
-    title,
-    slug,
-  ]);
-
-  const table = toMenuTable(slug);
-  await deps.pool.query(`
-    CREATE TABLE IF NOT EXISTS \`${table}\` (
-      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-      name VARCHAR(160) NOT NULL,
-      image_path VARCHAR(255) NOT NULL,
-      ingredients JSON NOT NULL,
-      choices JSON NOT NULL,
-      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (id)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-  `);
-
-  const [rows] = await deps.pool.query(
-    "SELECT id, title, slug FROM sections WHERE slug = ?",
-    [slug]
-  );
-  res.status(201).json(rows?.[0] || { title, slug });
-}
-
-function registerSectionsCreatePost(app, deps) {
-  app.post("/api/sections", (req, res, next) =>
-    handle(req, res, deps).catch(next)
-  );
-}
-
-module.exports = { registerSectionsCreatePost };
-
-# backend/src/config/env.js
-/**
- * Environment reader (no .env dependency to keep docker-only).
- */
-function loadEnv() {
-  const appPort = Number(process.env.APP_PORT || 3000);
-  const baseUrl = process.env.BASE_URL || "";
-  const uploadDir = process.env.UPLOAD_DIR || "/app/uploads";
-
-  return {
-    appPort,
-    baseUrl,
-    uploadDir,
-    db: {
-      host: process.env.DB_HOST || "127.0.0.1",
-      port: Number(process.env.DB_PORT || 3306),
-      user: process.env.DB_USER || "admin",
-      password: process.env.DB_PASSWORD || "admin",
-      database: process.env.DB_NAME || "restaurant",
-    },
-  };
-}
-
-module.exports = { loadEnv };
-
-# backend/src/domain/dishes/parseLines.js
-/**
- * Parse textarea lines into compact string array.
- */
-function parseLines(text) {
-  return String(text || "")
-    .split(/\r?\n/)
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .slice(0, 100);
-}
-
-module.exports = { parseLines };
-
-# backend/src/domain/sections/slug.js
-/**
- * Section slug normalization + validation (used as part of table name).
- */
-function normalizeSlug(input) {
-  const raw = String(input || "").trim().toLowerCase();
-  const slug = raw
-    .replace(/\s+/g, "_")
-    .replace(/[^a-z0-9_]+/g, "")
-    .replace(/_+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 48);
-
-  if (!slug || !/^[a-z0-9_]+$/.test(slug)) return null;
-  return slug;
-}
-
-function toMenuTable(slug) {
-  return `menu_${slug}`;
-}
-
-module.exports = { normalizeSlug, toMenuTable };
-
-# backend/src/index.js
-/**
- * App entry: Express server + API registration + static frontend + uploads.
- */
-const path = require("path");
-const express = require("express");
-
-const { loadEnv } = require("./config/env");
-const { createPool } = require("./infra/db/pool");
-const { waitForDb } = require("./infra/db/waitForDb");
-const { ensureSchema } = require("./infra/db/schema");
-const { ensureUploadDir, mountUploadsStatic } = require("./infra/storage/uploadsStatic");
-const { errorMiddleware } = require("./infra/http/errorMiddleware");
-
-const { registerHealthGet } = require("./api/health/get");
-const { registerSectionsListGet } = require("./api/sections/getList");
-const { registerSectionsCreatePost } = require("./api/sections/postCreate");
-const { registerDishesListGet } = require("./api/dishes/getList");
-const { registerDishesCreatePost } = require("./api/dishes/postCreate");
-
-async function main() {
-  const env = loadEnv();
-
-  const app = express();
-  app.disable("x-powered-by");
-  app.use(express.json({ limit: "2mb" }));
-
-  const pool = createPool(env);
-  await waitForDb(pool);
-  await ensureSchema(pool);
-
-  await ensureUploadDir(env.uploadDir);
-  mountUploadsStatic(app, env.uploadDir);
-
-  const deps = { env, pool };
-
-  registerHealthGet(app, deps);
-  registerSectionsListGet(app, deps);
-  registerSectionsCreatePost(app, deps);
-  registerDishesListGet(app, deps);
-  registerDishesCreatePost(app, deps);
-
-  const frontendDir = path.join(process.cwd(), "frontend");
-  app.use("/", express.static(frontendDir));
-
-  app.use(errorMiddleware);
-
-  app.listen(env.appPort, () => {
-    console.log(`Webapp: ${env.baseUrl || `http://localhost:${env.appPort}`}`);
-  });
-}
-
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
-
-# backend/src/infra/db/pool.js
-/**
- * MySQL pool factory.
- */
-const mysql = require("mysql2/promise");
-
-function createPool(env) {
-  return mysql.createPool({
-    host: env.db.host,
-    port: env.db.port,
-    user: env.db.user,
-    password: env.db.password,
-    database: env.db.database,
-    waitForConnections: true,
-    connectionLimit: 10,
-    namedPlaceholders: true,
-    timezone: "Z",
-  });
-}
-
-module.exports = { createPool };
-
-# backend/src/infra/db/schema.js
-/**
- * Minimal schema bootstrap: sections table.
- */
-async function ensureSchema(pool) {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS sections (
-      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-      title VARCHAR(120) NOT NULL,
-      slug VARCHAR(64) NOT NULL,
-      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (id),
-      UNIQUE KEY uq_sections_slug (slug)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-  `);
-
-  const [rows] = await pool.query("SELECT COUNT(*) AS cnt FROM sections");
-  if (Number(rows?.[0]?.cnt || 0) === 0) {
-    await pool.query(
-      "INSERT INTO sections (title, slug) VALUES (?, ?), (?, ?), (?, ?), (?, ?)",
-      ["Закуски", "snacks", "Салаты", "salads", "Горячие блюда", "mains", "Десерты", "desserts"]
-    );
-
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS menu_snacks (
-        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-        name VARCHAR(160) NOT NULL,
-        image_path VARCHAR(255) NOT NULL,
-        ingredients JSON NOT NULL,
-        choices JSON NOT NULL,
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        PRIMARY KEY (id)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-    `);
-
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS menu_salads (
-        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-        name VARCHAR(160) NOT NULL,
-        image_path VARCHAR(255) NOT NULL,
-        ingredients JSON NOT NULL,
-        choices JSON NOT NULL,
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        PRIMARY KEY (id)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-    `);
-
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS menu_mains (
-        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-        name VARCHAR(160) NOT NULL,
-        image_path VARCHAR(255) NOT NULL,
-        ingredients JSON NOT NULL,
-        choices JSON NOT NULL,
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        PRIMARY KEY (id)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-    `);
-
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS menu_desserts (
-        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-        name VARCHAR(160) NOT NULL,
-        image_path VARCHAR(255) NOT NULL,
-        ingredients JSON NOT NULL,
-        choices JSON NOT NULL,
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        PRIMARY KEY (id)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-    `);
-  }
-}
-
-module.exports = { ensureSchema };
-
-# backend/src/infra/db/waitForDb.js
-/**
- * Startup wait: ping DB with retries (fast fail if misconfigured).
- */
-async function waitForDb(pool) {
-  const startedAt = Date.now();
-  const maxMs = 45_000;
-
-  while (true) {
-    try {
-      await pool.query("SELECT 1");
-      return;
-    } catch (e) {
-      if (Date.now() - startedAt > maxMs) throw e;
-      await new Promise((r) => setTimeout(r, 800));
-    }
-  }
-}
-
-module.exports = { waitForDb };
-
-# backend/src/infra/http/errorMiddleware.js
-/**
- * Express error middleware (JSON).
- */
-function errorMiddleware(err, req, res, next) {
-  const msg = err?.message || "server error";
-  const status = /duplicate|ER_DUP_ENTRY/i.test(msg) ? 409 : 500;
-  console.error(err);
-  res.status(status).json({ error: msg });
-}
-
-module.exports = { errorMiddleware };
-
-# backend/src/infra/storage/imageUpload.js
-/**
- * Multer middleware for dish images.
- */
-const multer = require("multer");
-const path = require("path");
-const { buildStoredFilename } = require("./uploadsStatic");
-
-function createImageUpload(uploadDir) {
-  const storage = multer.diskStorage({
-    destination: uploadDir,
-    filename: (req, file, cb) => cb(null, buildStoredFilename(file.originalname)),
-  });
-
-  const fileFilter = (req, file, cb) => {
-    const ok = /^image\//.test(file.mimetype);
-    cb(ok ? null : new Error("Only image uploads are allowed"), ok);
-  };
-
-  return multer({
-    storage,
-    fileFilter,
-    limits: { fileSize: 8 * 1024 * 1024 },
-  });
-}
-
-module.exports = { createImageUpload };
-
-# backend/src/infra/storage/uploadsStatic.js
-/**
- * Uploads directory bootstrap + express static mount.
- */
-const express = require("express");
-const fs = require("fs/promises");
-const path = require("path");
-
-async function ensureUploadDir(uploadDir) {
-  await fs.mkdir(uploadDir, { recursive: true });
-}
-
-function mountUploadsStatic(app, uploadDir) {
-  app.use("/uploads", express.static(uploadDir, { maxAge: "1h", etag: true }));
-}
-
-function buildStoredFilename(originalName) {
-  const ts = Date.now();
-  const safeBase = path
-    .basename(originalName)
-    .replace(/[^a-zA-Z0-9._-]+/g, "_")
-    .slice(0, 80);
-
-  return `${ts}_${safeBase}`;
-}
-
-module.exports = { ensureUploadDir, mountUploadsStatic, buildStoredFilename };
+- подтянет изменения, перезагрузит только app (без бд, phpMA и тд.)
+docker compose restart app
 
 # docker-compose.yml
 # Restaurant menu trainer: Node.js + MySQL 8.4 + phpMyAdmin.
@@ -561,7 +68,7 @@ services:
       DB_PASSWORD: admin
       DB_NAME: restaurant
       UPLOAD_DIR: /app/uploads
-      BASE_URL: http://localhost:4001
+      BASE_URL: /vas-menu
     ports:
       - "4001:3000"
     volumes:
@@ -574,14 +81,20 @@ volumes:
 
 # frontend/app.js
 /**
- * Frontend: sections + cards + add forms.
+ * Frontend: sections + cards + add forms + settings + fullscreen image.
  */
 const $ = (id) => document.getElementById(id);
+
+const STORAGE_KEY = "rmt_settings_v1";
 
 const state = {
   sections: [],
   active: null,
-  reveal: new Set(), // dish id
+  reveal: new Set(), // dish id (used only when hideName enabled)
+  settings: {
+    hideName: true,
+    hideDesc: true,
+  },
 };
 
 async function api(path, opts) {
@@ -590,6 +103,20 @@ async function api(path, opts) {
   const data = ct.includes("application/json") ? await res.json() : await res.text();
   if (!res.ok) throw new Error(data?.error || String(data));
   return data;
+}
+
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const s = JSON.parse(raw);
+    state.settings.hideName = !!s.hideName;
+    state.settings.hideDesc = !!s.hideDesc;
+  } catch (_) {}
+}
+
+function saveSettings() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.settings));
 }
 
 function starName(name) {
@@ -640,6 +167,7 @@ function renderCards(cards) {
     img.className = "card__img";
     img.src = d.imageUrl;
     img.alt = "";
+    img.onclick = () => openFullscreen(d.imageUrl);
 
     const body = document.createElement("div");
     body.className = "card__body";
@@ -650,46 +178,70 @@ function renderCards(cards) {
     const name = document.createElement("div");
     name.className = "card__name";
 
-    const isRevealed = state.reveal.has(d.id);
-    name.textContent = isRevealed ? d.name : starName(d.name);
-
-    const toggle = document.createElement("button");
-    toggle.className = "btn btn--ghost";
-    toggle.type = "button";
-    toggle.textContent = isRevealed ? "Скрыть" : "Показать";
-    toggle.onclick = () => {
-      if (state.reveal.has(d.id)) state.reveal.delete(d.id);
-      else state.reveal.add(d.id);
-      loadCards();
-    };
+    const showName = !state.settings.hideName || state.reveal.has(d.id);
+    name.textContent = showName ? d.name : starName(d.name);
 
     nameRow.appendChild(name);
-    nameRow.appendChild(toggle);
+
+    if (state.settings.hideName) {
+      const toggle = document.createElement("button");
+      toggle.className = "btn btn--ghost";
+      toggle.type = "button";
+      toggle.textContent = state.reveal.has(d.id) ? "Скрыть" : "Показать";
+      toggle.onclick = () => {
+        if (state.reveal.has(d.id)) state.reveal.delete(d.id);
+        else state.reveal.add(d.id);
+        loadCards();
+      };
+      nameRow.appendChild(toggle);
+    }
 
     const meta = document.createElement("div");
     meta.className = "card__meta";
     meta.textContent = `#${d.id}`;
 
-    const details = document.createElement("details");
-    details.className = "details";
-
-    const summary = document.createElement("summary");
-    summary.textContent = "Описание";
-
-    const wrap = document.createElement("div");
-    wrap.innerHTML = `
-      <div class="card__meta" style="margin-top:8px;">Ингредиенты</div>
-      ${renderUl(d.ingredients)}
-      <div class="card__meta" style="margin-top:8px;">На выбор</div>
-      ${renderUl(d.choices)}
-    `;
-
-    details.appendChild(summary);
-    details.appendChild(wrap);
-
     body.appendChild(nameRow);
     body.appendChild(meta);
-    body.appendChild(details);
+
+    if (state.settings.hideDesc) {
+      const details = document.createElement("details");
+      details.className = "details";
+
+      const summary = document.createElement("summary");
+      summary.textContent = "Состав";
+
+      const wrap = document.createElement("div");
+      wrap.innerHTML = `
+        <div class="card__meta" style="margin-top:8px;">Ингредиенты</div>
+        ${renderUl(d.ingredients)}
+        <div class="card__meta" style="margin-top:8px;">На выбор</div>
+        ${renderUl(d.choices)}
+      `;
+
+      details.appendChild(summary);
+      details.appendChild(wrap);
+      body.appendChild(details);
+    } else {
+      const wrap = document.createElement("div");
+      wrap.innerHTML = `
+        <div class="card__meta" style="margin-top:8px;">Ингредиенты</div>
+        ${renderUl(d.ingredients)}
+        <div class="card__meta" style="margin-top:8px;">На выбор</div>
+        ${renderUl(d.choices)}
+      `;
+      body.appendChild(wrap);
+    }
+
+    const notes = String(d.notes || "").trim();
+    if (notes) {
+      const n = document.createElement("div");
+      n.className = "card__notes";
+      n.innerHTML = `
+        <div class="card__notesTitle">Заметки</div>
+        <div class="card__notesText">${escapeHtml(notes)}</div>
+      `;
+      body.appendChild(n);
+    }
 
     card.appendChild(img);
     card.appendChild(body);
@@ -778,15 +330,57 @@ async function onAddSection(ev) {
   }
 }
 
+function openSettings() {
+  $("setHideName").checked = state.settings.hideName;
+  $("setHideDesc").checked = state.settings.hideDesc;
+  $("dlgSettings").showModal();
+}
+
+function applySettings() {
+  state.settings.hideName = $("setHideName").checked;
+  state.settings.hideDesc = $("setHideDesc").checked;
+
+  if (!state.settings.hideName) state.reveal.clear(); // больше не нужно
+
+  saveSettings();
+  loadCards();
+}
+
+function openFullscreen(url) {
+  $("fsImg").src = url;
+  const dlg = $("dlgImage");
+  dlg.showModal();
+}
+
+function closeFullscreen() {
+  const dlg = $("dlgImage");
+  dlg.close();
+  $("fsImg").src = "";
+}
+
 async function boot() {
+  loadSettings();
+
   $("btnReload").onclick = async () => {
     await loadSections();
     await loadCards();
   };
   $("btnAddDish").onclick = openAddDish;
+  $("btnSettings").onclick = openSettings;
 
   $("formAddDish").addEventListener("submit", onAddDish);
   $("formAddSection").addEventListener("submit", onAddSection);
+
+  $("formSettings").addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    applySettings();
+    $("dlgSettings").close();
+  });
+
+  $("fsClose").onclick = closeFullscreen;
+  $("dlgImage").addEventListener("click", (ev) => {
+    if (ev.target === $("dlgImage")) closeFullscreen();
+  });
 
   await loadSections();
 }
@@ -803,14 +397,16 @@ boot().catch((e) => {
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Меню — тренажёр</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <title>Меню</title>
+    <link rel="stylesheet" href="styles.css" />
+    <base href="/vas-menu/">
   </head>
   <body>
     <header class="topbar">
-      <div class="topbar__title">Меню ресторана — тренажёр</div>
+      <div class="topbar__title">Меню</div>
       <div class="topbar__right">
         <button id="btnReload" class="btn btn--ghost" type="button">Обновить</button>
+        <button id="btnSettings" class="btn btn--ghost" type="button">Настройки</button>
         <button id="btnAddDish" class="btn" type="button">Добавить блюдо</button>
       </div>
     </header>
@@ -840,7 +436,7 @@ boot().catch((e) => {
       <section class="content">
         <div class="content__head">
           <h2 id="activeSectionTitle">Карточки</h2>
-          <div class="content__hint">Изображение видно всегда. Название скрыто. Описание под спойлером.</div>
+          <div class="content__hint">Нажми на картинку — fullscreen. Скрытия управляются в “Настройки”.</div>
         </div>
 
         <div id="cards" class="cards"></div>
@@ -848,6 +444,7 @@ boot().catch((e) => {
       </section>
     </main>
 
+    <!-- Add dish -->
     <dialog id="dlgAddDish" class="dialog">
       <form id="formAddDish" class="form" method="dialog">
         <div class="dialog__head">
@@ -880,6 +477,11 @@ boot().catch((e) => {
           <textarea name="choices" rows="5" placeholder="Соус: томатный&#10;Соус: сливочный"></textarea>
         </label>
 
+        <label class="field">
+          <div class="field__label">Заметки</div>
+          <textarea name="notes" rows="3" placeholder="Например: подаётся холодным / без глютена / запомнить соус"></textarea>
+        </label>
+
         <div class="form__actions">
           <button class="btn" type="submit">Сохранить</button>
           <div id="dishMsg" class="msg"></div>
@@ -887,7 +489,40 @@ boot().catch((e) => {
       </form>
     </dialog>
 
-    <script src="/app.js"></script>
+    <!-- Settings -->
+    <dialog id="dlgSettings" class="dialog">
+      <form id="formSettings" class="form" method="dialog">
+        <div class="dialog__head">
+          <div class="dialog__title">Настройки</div>
+          <button class="btn btn--ghost" value="cancel" type="submit">Закрыть</button>
+        </div>
+
+        <label class="check">
+          <input id="setHideName" type="checkbox" />
+          <span>Скрывать название (*** вместо названия)</span>
+        </label>
+
+        <label class="check">
+          <input id="setHideDesc" type="checkbox" />
+          <span>Скрывать состав (под спойлером)</span>
+        </label>
+
+        <div class="form__actions">
+          <button class="btn" value="ok" type="submit">Применить</button>
+          <div class="msg">Сохраняется локально в браузере.</div>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- Fullscreen image -->
+    <dialog id="dlgImage" class="dialog dialog--fullscreen">
+      <div class="fs">
+        <img id="fsImg" class="fs__img" alt="" />
+        <button id="fsClose" class="btn btn--ghost fs__close" type="button">Закрыть</button>
+      </div>
+    </dialog>
+
+    <script src="app.js" defer></script>
   </body>
 </html>
 
@@ -907,7 +542,7 @@ a{ color:inherit; }
 .panel{ background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:14px; }
 .content{ background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:14px; min-height: 60vh; }
 .content__head{ display:flex; justify-content:space-between; align-items:flex-end; gap:12px; }
-.content__hint{ color:var(--muted); font-size:12px; }
+.content__hint{ display: none; color:var(--muted); font-size:12px; }
 
 .sections{ display:flex; flex-direction:column; gap:8px; margin-top:8px; }
 .sectionBtn{ text-align:left; padding:10px 12px; border-radius:12px; border:1px solid var(--line); background:var(--card); color:var(--text); cursor:pointer; }
@@ -916,13 +551,16 @@ a{ color:inherit; }
 
 .cards{ display:grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap:12px; margin-top:12px; }
 .card{ background:var(--card); border:1px solid var(--line); border-radius:16px; overflow:hidden; display:flex; flex-direction:column; }
-.card__img{ width:100%; aspect-ratio: 4 / 3; object-fit:cover; background:#000; }
+.card__img{ width:100%; aspect-ratio: 4 / 3; object-fit:cover; background:#000; cursor: zoom-in; }
 .card__body{ padding:12px; display:flex; flex-direction:column; gap:8px; }
 .card__nameRow{ display:flex; justify-content:space-between; align-items:center; gap:10px; }
 .card__name{ font-weight:800; letter-spacing:1px; user-select:none; }
 .card__meta{ color:var(--muted); font-size:12px; }
 .card__list{ margin:8px 0 0; padding-left:18px; }
 .card__list li{ margin:4px 0; }
+.card__notes{ margin-top:8px; padding-top:8px; border-top:1px dashed var(--line); color: var(--text); }
+.card__notesTitle{ color: var(--muted); font-size:12px; margin-bottom:6px; }
+.card__notesText{ white-space: pre-wrap; }
 
 .btn{ appearance:none; border:1px solid var(--line); background:var(--accent); color:#0b0f16; padding:10px 12px; border-radius:12px; cursor:pointer; font-weight:700; }
 .btn--ghost{ background:transparent; color:var(--text); }
@@ -946,6 +584,16 @@ textarea{ resize:vertical; }
 .empty{ color:var(--muted); margin-top:12px; }
 .hidden{ display:none; }
 
-summary {
-  cursor: pointer;
+summary { cursor: pointer; }
+
+.check{ display:flex; gap:10px; align-items:center; padding:10px; border:1px solid var(--line); border-radius:12px; background:#0b1220; }
+.check input{ width:auto; }
+
+.dialog--fullscreen{ width: min(98vw, 1400px); height: min(92vh, 900px); }
+.dialog--fullscreen .fs{ position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center; padding:12px; }
+.fs__img{ max-width:100%; max-height:100%; object-fit: contain; border-radius:12px; border:1px solid var(--line); background:#000; }
+.fs__close{ position:absolute; top:10px; right:10px; }
+
+.card__meta {
+  display: none;
 }

@@ -7,17 +7,6 @@ const { createImageUpload } = require("../../infra/storage/imageUpload");
 const { normalizeSlug, toMenuTable } = require("../../domain/sections/slug");
 const { parseLines } = require("../../domain/dishes/parseLines");
 
-function registerDishesCreatePost(app, deps) {
-  const upload = createImageUpload(deps.env.uploadDir).single("image");
-
-  app.post("/api/dishes", (req, res, next) =>
-    upload(req, res, (err) => {
-      if (err) return next(err);
-      handle(req, res, deps).catch(next);
-    })
-  );
-}
-
 async function handle(req, res, deps) {
   const section = normalizeSlug(req.body?.section);
   if (!section) return res.status(400).json({ error: "section is required" });
@@ -46,6 +35,17 @@ async function handle(req, res, deps) {
   );
 
   res.status(201).json({ ok: true });
+}
+
+function registerDishesCreatePost(app, deps, basePath = "") {
+  const upload = createImageUpload(deps.env.uploadDir).single("image");
+
+  app.post(`${basePath}/api/dishes`, (req, res, next) =>
+    upload(req, res, (err) => {
+      if (err) return next(err);
+      handle(req, res, deps).catch(next);
+    })
+  );
 }
 
 module.exports = { registerDishesCreatePost };

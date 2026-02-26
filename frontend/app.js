@@ -15,11 +15,44 @@ const state = {
   },
 };
 
-async function api(path, opts) {
-  const res = await fetch(path, opts);
+const API_BASE = new URL("api/", document.baseURI); // => https://host/vas-menu/api/
+
+function toApiUrl(p) {
+  const s = String(p || "").trim();
+
+  // allow full URLs if ever needed
+  if (/^https?:\/\//i.test(s)) return s;
+
+  // "/api/sections" | "api/sections" | "/sections" | "sections"
+  let x = s.replace(/^\/+/, "");
+  if (x.startsWith("api/")) x = x.slice(4);
+  if (!x) x = "";
+
+  return new URL(x, API_BASE).toString();
+}
+
+function errMsg(data) {
+  if (data == null) return "Request failed";
+  if (typeof data === "string") return data.trim() || "Request failed";
+  if (typeof data === "object") {
+    if (data.error) return String(data.error);
+    try {
+      return JSON.stringify(data);
+    } catch (_) {
+      return String(data);
+    }
+  }
+  return String(data);
+}
+
+async function api(path, opts = {}) {
+  const url = toApiUrl(path);
+  const res = await fetch(url, opts);
+
   const ct = res.headers.get("content-type") || "";
   const data = ct.includes("application/json") ? await res.json() : await res.text();
-  if (!res.ok) throw new Error(data?.error || String(data));
+
+  if (!res.ok) throw new Error(errMsg(data));
   return data;
 }
 
@@ -49,7 +82,8 @@ function renderSections() {
   state.sections.forEach((s) => {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "sectionBtn" + (state.active?.slug === s.slug ? " sectionBtn--active" : "");
+    btn.className =
+      "sectionBtn" + (state.active?.slug === s.slug ? " sectionBtn--active" : "");
     btn.textContent = s.title;
     btn.onclick = () => setActiveSection(s.slug);
     box.appendChild(btn);
@@ -126,7 +160,7 @@ function renderCards(cards) {
       details.className = "details";
 
       const summary = document.createElement("summary");
-      summary.textContent = "Описание";
+      summary.textContent = "Состав";
 
       const wrap = document.createElement("div");
       wrap.innerHTML = `
@@ -258,7 +292,7 @@ function applySettings() {
   state.settings.hideName = $("setHideName").checked;
   state.settings.hideDesc = $("setHideDesc").checked;
 
-  if (!state.settings.hideName) state.reveal.clear(); // больше не нужно
+  if (!state.settings.hideName) state.reveal.clear();
 
   saveSettings();
   loadCards();
@@ -266,13 +300,11 @@ function applySettings() {
 
 function openFullscreen(url) {
   $("fsImg").src = url;
-  const dlg = $("dlgImage");
-  dlg.showModal();
+  $("dlgImage").showModal();
 }
 
 function closeFullscreen() {
-  const dlg = $("dlgImage");
-  dlg.close();
+  $("dlgImage").close();
   $("fsImg").src = "";
 }
 

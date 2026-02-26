@@ -13,7 +13,7 @@ a{ color:inherit; }
 .panel{ background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:14px; }
 .content{ background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:14px; min-height: 60vh; }
 .content__head{ display:flex; justify-content:space-between; align-items:flex-end; gap:12px; }
-.content__hint{ color:var(--muted); font-size:12px; }
+.content__hint{ display: none; color:var(--muted); font-size:12px; }
 
 .sections{ display:flex; flex-direction:column; gap:8px; margin-top:8px; }
 .sectionBtn{ text-align:left; padding:10px 12px; border-radius:12px; border:1px solid var(--line); background:var(--card); color:var(--text); cursor:pointer; }

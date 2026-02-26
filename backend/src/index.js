@@ -1,5 +1,6 @@
 /**
  * App entry: Express server + API registration + static frontend + uploads.
+ * Also exposes API+uploads under /vas-menu/* for Cloudflare Tunnel path routing.
  */
 const path = require("path");
 const express = require("express");
@@ -8,7 +9,7 @@ const { loadEnv } = require("./config/env");
 const { createPool } = require("./infra/db/pool");
 const { waitForDb } = require("./infra/db/waitForDb");
 const { ensureSchema } = require("./infra/db/schema");
-const { ensureUploadDir, mountUploadsStatic } = require("./infra/storage/uploadsStatic");
+const { ensureUploadDir } = require("./infra/storage/uploadsStatic");
 const { errorMiddleware } = require("./infra/http/errorMiddleware");
 
 const { registerHealthGet } = require("./api/health/get");
@@ -29,18 +30,32 @@ async function main() {
   await ensureSchema(pool);
 
   await ensureUploadDir(env.uploadDir);
-  mountUploadsStatic(app, env.uploadDir);
+
+  // uploads: доступны и в корне, и под /vas-menu
+  app.use("/uploads", express.static(env.uploadDir, { maxAge: "1h", etag: true }));
+  app.use("/vas-menu/uploads", express.static(env.uploadDir, { maxAge: "1h", etag: true }));
 
   const deps = { env, pool };
 
-  registerHealthGet(app, deps);
-  registerSectionsListGet(app, deps);
-  registerSectionsCreatePost(app, deps);
-  registerDishesListGet(app, deps);
-  registerDishesCreatePost(app, deps);
+  // API router: монтируем и в корень, и под /vas-menu
+  const api = express.Router();
+  registerHealthGet(api, deps);
+  registerSectionsListGet(api, deps);
+  registerSectionsCreatePost(api, deps);
+  registerDishesListGet(api, deps);
+  registerDishesCreatePost(api, deps);
 
+  app.use(api);
+  app.use("/vas-menu", api);
+
+  // Frontend
   const frontendDir = path.join(process.cwd(), "frontend");
+  const indexHtml = path.join(frontendDir, "index.html");
+
   app.use("/", express.static(frontendDir));
+  app.use("/vas-menu", express.static(frontendDir));
+  app.get("/vas-menu", (req, res) => res.sendFile(indexHtml));
+  app.get("/vas-menu/*", (req, res) => res.sendFile(indexHtml));
 
   app.use(errorMiddleware);
 

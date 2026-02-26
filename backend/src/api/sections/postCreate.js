@@ -37,8 +37,8 @@ async function handle(req, res, deps) {
   res.status(201).json(rows?.[0] || { title, slug });
 }
 
-function registerSectionsCreatePost(app, deps) {
-  app.post("/api/sections", (req, res, next) =>
+function registerSectionsCreatePost(app, deps, basePath = "") {
+  app.post(`${basePath}/api/sections`, (req, res, next) =>
     handle(req, res, deps).catch(next)
   );
 }

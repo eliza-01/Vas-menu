@@ -11,7 +11,7 @@ async function handle(req, res, deps) {
 
   const [rows] = await deps.pool.query(
     `SELECT id, name, image_path, ingredients, choices, notes, created_at
-     FROM \`${table}\` ORDER BY id DESC LIMIT 200`
+     FROM \`${table}\` ORDER BY id ASC LIMIT 200`
   );
 
   const base = deps.env.baseUrl || "";
@@ -28,8 +28,10 @@ async function handle(req, res, deps) {
   );
 }
 
-function registerDishesListGet(app, deps) {
-  app.get("/api/dishes", (req, res, next) => handle(req, res, deps).catch(next));
+function registerDishesListGet(app, deps, basePath = "") {
+  app.get(`${basePath}/api/dishes`, (req, res, next) =>
+    handle(req, res, deps).catch(next)
+  );
 }
 
 module.exports = { registerDishesListGet };

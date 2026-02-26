@@ -8,8 +8,8 @@ async function handle(req, res, deps) {
   res.json(rows);
 }
 
-function registerSectionsListGet(app, deps) {
-  app.get("/api/sections", (req, res, next) =>
+function registerSectionsListGet(app, deps, basePath = "") {
+  app.get(`${basePath}/api/sections`, (req, res, next) =>
     handle(req, res, deps).catch(next)
   );
 }

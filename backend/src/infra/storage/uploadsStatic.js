@@ -9,8 +9,9 @@ async function ensureUploadDir(uploadDir) {
   await fs.mkdir(uploadDir, { recursive: true });
 }
 
-function mountUploadsStatic(app, uploadDir) {
-  app.use("/uploads", express.static(uploadDir, { maxAge: "1h", etag: true }));
+function mountUploadsStatic(app, uploadDir, basePath = "") {
+  const p = `${basePath}/uploads`;
+  app.use(p, express.static(uploadDir, { maxAge: "1h", etag: true }));
 }
 
 function buildStoredFilename(originalName) {
