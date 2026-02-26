@@ -4,12 +4,12 @@
 
 """
 Собирает файлы проекта в один txt, разделяя блоки путями исходных файлов.
-Разделитель: строка вида `# src/index.ts`
+Разделитель: строка вида `# backend/src/index.js`
 
 Корень проекта:
 1) --root
 2) PROJECT_ROOT (env)
-3) (ПО УМОЛЧАНИЮ) ищем ближайший родительский каталог с `package.json`
+3) (ПО УМОЛЧАНИЮ) ищем ближайший родительский каталог с маркерами проекта
    относительно расположения этого скрипта.
 
 ВАЖНО:
@@ -45,35 +45,45 @@ ALL_FILES: bool = True
 
 # Директории (относительно корня проекта), из которых собираем ВСЁ рекурсивно.
 INCLUDE_DIRS: List[str] = [
-    "src",
-    "examples",
+    "backend/src",
+    "frontend",
 ]
 
 # Файлы (относительно корня проекта), которые добавляем явно.
 INCLUDE_FILES: List[str] = [
     ".gitignore",
-    "package.json",
-    "package-lock.json",
-    "tsconfig.json",
+    "docker-compose.yml",
     "README.md",
+
+    "backend/Dockerfile",
+    "backend/package.json",
+
+    # если появятся — будут подтянуты без падения (иначе будет WARNING)
+    "backend/package-lock.json",
+    "frontend/package.json",
+    "frontend/package-lock.json",
 ]
 
 # Директории, которые НИКОГДА не кладём в дамп (по относительному пути от корня проекта).
 # ВАЖНО: это именно относительные пути, а не "имена где угодно".
 IGNORE_DIRS: Set[str] = {
     ".git",
-    "node_modules",
     ".idea",
     ".vscode",
 
+    # node deps
+    "backend/node_modules",
+    "frontend/node_modules",
+
     # build/artifacts
-    "dist",
-    "build",
-    "out",
-    "coverage",
-    ".next",
-    ".turbo",
-    ".cache",
+    "backend/dist",
+    "backend/build",
+    "backend/out",
+    "backend/coverage",
+    "frontend/dist",
+    "frontend/build",
+    "frontend/out",
+    "frontend/coverage",
 
     # окружения/локальные данные
     "venv",
@@ -82,6 +92,7 @@ IGNORE_DIRS: Set[str] = {
     "logs",
     "data",
 
+    # инструменты (обычно не нужны в бандле)
     "tools",
 }
 
@@ -95,7 +106,7 @@ IGNORE_FILES: Set[str] = {
 
     # output bundles
     "project_bundle.txt",
-    "arbi_bundle.txt",
+    "bundle.txt",
 
     # secrets
     ".env",
@@ -108,6 +119,9 @@ ALLOWED_EXTS: Set[str] = {
     ".json",
     ".yml", ".yaml",
     ".toml", ".ini",
+
+    # web
+    ".html", ".css",
 
     # js/ts
     ".js", ".mjs", ".cjs",
@@ -126,6 +140,7 @@ ALLOWED_NAMES: Set[str] = {
     ".prettierrc",
     ".prettierignore",
     ".eslintignore",
+    ".env.example",
     "Dockerfile",
     "LICENSE",
     "Makefile",
@@ -153,21 +168,29 @@ def normalize_rel_posix(p: str) -> str:
 def find_project_root_by_markers(start: Path) -> Optional[Path]:
     """
     Ищем вверх от start ближайший каталог с маркерами проекта.
-    Для Node/TS — `package.json` (основной маркер).
+
+    Для этого репо маркеры:
+    - docker-compose.yml в корне
+    - backend/package.json
+    - frontend/index.html
     """
     cur = start.resolve()
     if cur.is_file():
         cur = cur.parent
 
     for parent in [cur, *cur.parents]:
-        if (parent / "package.json").is_file():
+        if (parent / "docker-compose.yml").is_file():
+            return parent
+        if (parent / "backend" / "package.json").is_file():
+            return parent
+        if (parent / "frontend" / "index.html").is_file():
             return parent
     return None
 
 
 def script_based_project_root() -> Path:
     """
-    По умолчанию считаем корнем ближайшую директорию с package.json
+    По умолчанию считаем корнем ближайшую директорию с маркерами проекта
     относительно расположения скрипта.
     """
     here = Path(__file__).resolve()
@@ -439,7 +462,7 @@ def collect_files(project_root: Path, out_path: Path) -> List[Path]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Сборка проекта в один файл")
-    parser.add_argument("--root", default=None, help="Корень проекта (если не задан — ищем по package.json от расположения скрипта)")
+    parser.add_argument("--root", default=None, help="Корень проекта (если не задан — ищем по маркерам от расположения скрипта)")
     parser.add_argument(
         "--out",
         default=DEFAULT_OUTPUT,
