@@ -1,0 +1,61 @@
+# Restaurant menu trainer: Node.js + MySQL 8.4 + phpMyAdmin.
+services:
+  db:
+    image: mysql:8.4
+    container_name: rmt-mysql84
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: restaurant
+      MYSQL_USER: admin
+      MYSQL_PASSWORD: admin
+      TZ: UTC
+    ports:
+      - "3309:3306"
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  phpmyadmin:
+    image: phpmyadmin:5.2
+    container_name: rmt-phpmyadmin
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PMA_HOST: db
+      PMA_PORT: 3306
+      PMA_USER: admin
+      PMA_PASSWORD: admin
+      UPLOAD_LIMIT: 64M
+    ports:
+      - "8084:80"
+
+  app:
+    image: vas-menu-app:amd64
+    platform: linux/amd64
+    container_name: rmt-app
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      APP_PORT: 3000
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_USER: admin
+      DB_PASSWORD: admin
+      DB_NAME: restaurant
+      UPLOAD_DIR: /app/uploads
+      BASE_URL: http://localhost:4001
+    ports:
+      - "4001:3000"
+    volumes:
+      - ./backend/src:/app/backend/src
+      - ./frontend:/app/frontend
+      - ./data/uploads:/app/uploads
+
+volumes:
+  db_data:

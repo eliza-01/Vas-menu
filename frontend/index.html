@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Меню — тренажёр</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar__title">Меню ресторана — тренажёр</div>
+      <div class="topbar__right">
+        <button id="btnReload" class="btn btn--ghost" type="button">Обновить</button>
+        <button id="btnAddDish" class="btn" type="button">Добавить блюдо</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel">
+        <h2>Разделы</h2>
+        <div id="sections" class="sections"></div>
+
+        <details class="details">
+          <summary>Добавить раздел</summary>
+          <form id="formAddSection" class="form form--compact">
+            <label class="field">
+              <div class="field__label">Название</div>
+              <input name="title" autocomplete="off" required />
+            </label>
+            <label class="field">
+              <div class="field__label">Slug (опционально)</div>
+              <input name="slug" autocomplete="off" placeholder="например: drinks" />
+            </label>
+            <button class="btn" type="submit">Создать</button>
+            <div id="sectionMsg" class="msg"></div>
+          </form>
+        </details>
+      </section>
+
+      <section class="content">
+        <div class="content__head">
+          <h2 id="activeSectionTitle">Карточки</h2>
+          <div class="content__hint">Изображение видно всегда. Название скрыто. Описание под спойлером.</div>
+        </div>
+
+        <div id="cards" class="cards"></div>
+        <div id="empty" class="empty hidden">Выберите раздел или добавьте блюда.</div>
+      </section>
+    </main>
+
+    <dialog id="dlgAddDish" class="dialog">
+      <form id="formAddDish" class="form" method="dialog">
+        <div class="dialog__head">
+          <div class="dialog__title">Добавить блюдо</div>
+          <button class="btn btn--ghost" value="cancel" type="submit">Закрыть</button>
+        </div>
+
+        <label class="field">
+          <div class="field__label">Раздел</div>
+          <select name="section" id="dishSection" required></select>
+        </label>
+
+        <label class="field">
+          <div class="field__label">Название</div>
+          <input name="name" autocomplete="off" required />
+        </label>
+
+        <label class="field">
+          <div class="field__label">Изображение</div>
+          <input name="image" type="file" accept="image/*" required />
+        </label>
+
+        <label class="field">
+          <div class="field__label">Ингредиенты (по одному на строку)</div>
+          <textarea name="ingredients" rows="5" placeholder="Томаты&#10;Моцарелла&#10;Базилик"></textarea>
+        </label>
+
+        <label class="field">
+          <div class="field__label">На выбор (по одному на строку)</div>
+          <textarea name="choices" rows="5" placeholder="Соус: томатный&#10;Соус: сливочный"></textarea>
+        </label>
+
+        <div class="form__actions">
+          <button class="btn" type="submit">Сохранить</button>
+          <div id="dishMsg" class="msg"></div>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
