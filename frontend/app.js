@@ -1,3 +1,4 @@
+﻿// frontend/app.js
 /**
  * Frontend: sections + cards + add forms + settings + fullscreen image.
  */

@@ -1,3 +1,4 @@
+﻿// backend/src/infra/db/waitForDb.js
 /**
  * Startup wait: ping DB with retries (fast fail if misconfigured).
  */

@@ -1,3 +1,4 @@
+﻿// backend/src/infra/db/pool.js
 /**
  * MySQL pool factory.
  */

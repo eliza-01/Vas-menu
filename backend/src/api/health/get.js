@@ -1,3 +1,4 @@
+﻿// backend/src/api/health/get.js
 /**
  * GET /api/health -> { ok: true }
  */

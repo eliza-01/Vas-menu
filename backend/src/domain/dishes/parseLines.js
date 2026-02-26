@@ -1,3 +1,4 @@
+﻿// backend/src/domain/dishes/parseLines.js
 /**
  * Parse textarea lines into compact string array.
  */

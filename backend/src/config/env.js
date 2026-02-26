@@ -1,3 +1,4 @@
+﻿// backend/src/config/env.js
 /**
  * Environment reader (no .env dependency to keep docker-only).
  */

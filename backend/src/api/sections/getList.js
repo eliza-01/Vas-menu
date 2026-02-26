@@ -1,3 +1,4 @@
+﻿// backend/src/api/sections/getList.js
 /**
  * GET /api/sections -> [{id,title,slug}]
  */

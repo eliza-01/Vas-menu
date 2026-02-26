@@ -68,7 +68,7 @@ INCLUDE_FILES: List[str] = [
 # ВАЖНО: это именно относительные пути, а не "имена где угодно".
 IGNORE_DIRS: Set[str] = {
     # "frontend",
-    "backend",
+    # "backend",
 
     ".git",
     ".idea",

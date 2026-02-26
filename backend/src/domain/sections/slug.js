@@ -1,3 +1,4 @@
+﻿// backend/src/domain/sections/slug.js
 /**
  * Section slug normalization + validation (used as part of table name).
  */

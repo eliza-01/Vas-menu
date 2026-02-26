@@ -1,3 +1,4 @@
+﻿// backend/src/infra/storage/uploadsStatic.js
 /**
  * Uploads directory bootstrap + express static mount.
  */

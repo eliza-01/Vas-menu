@@ -1,3 +1,4 @@
+﻿// backend/src/api/sections/postCreate.js
 /**
  * POST /api/sections { title, slug? } -> created section
  * Also creates the menu_<slug> table.

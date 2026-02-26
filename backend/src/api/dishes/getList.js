@@ -1,5 +1,7 @@
+﻿// backend/src/api/dishes/getList.js
 /**
  * GET /api/dishes?section=<slug> -> dish cards
+ * imageUrl is relative (uploads/<file>) to avoid localhost/loopback issues behind tunnel.
  */
 const { normalizeSlug, toMenuTable } = require("../../domain/sections/slug");
 
@@ -14,12 +16,14 @@ async function handle(req, res, deps) {
      FROM \`${table}\` ORDER BY id ASC LIMIT 200`
   );
 
-  const base = deps.env.baseUrl || "";
   res.json(
     rows.map((r) => ({
       id: r.id,
       name: r.name,
-      imageUrl: `${base}/uploads/${r.image_path}`,
+      // ВАЖНО: относительный путь.
+      // При открытии https://l2arena.su/vas-menu/ с <base href="/vas-menu/">
+      // это станет https://l2arena.su/vas-menu/uploads/<file>
+      imageUrl: `uploads/${r.image_path}`,
       ingredients: r.ingredients || [],
       choices: r.choices || [],
       notes: r.notes || "",

@@ -1,3 +1,4 @@
+﻿// backend/src/index.js
 /**
  * App entry: Express server + API registration + static frontend + uploads.
  * Also exposes API+uploads under /vas-menu/* for Cloudflare Tunnel path routing.

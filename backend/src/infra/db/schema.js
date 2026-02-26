@@ -1,3 +1,4 @@
+﻿// backend/src/infra/db/schema.js
 /**
  * Minimal schema bootstrap: sections table + menu_<slug> tables + lightweight migrations.
  */

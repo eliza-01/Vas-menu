@@ -1,3 +1,4 @@
+﻿// backend/src/infra/http/errorMiddleware.js
 /**
  * Express error middleware (JSON).
  */
