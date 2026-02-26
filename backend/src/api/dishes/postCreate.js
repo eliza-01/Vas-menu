@@ -1,6 +1,6 @@
 /**
  * POST /api/dishes (multipart/form-data)
- * Fields: section, name, ingredients, choices, image
+ * Fields: section, name, ingredients, choices, notes, image
  */
 const path = require("path");
 const { createImageUpload } = require("../../infra/storage/imageUpload");
@@ -29,13 +29,20 @@ async function handle(req, res, deps) {
 
   const ingredients = parseLines(req.body?.ingredients);
   const choices = parseLines(req.body?.choices);
+  const notes = String(req.body?.notes || "").trim().slice(0, 2000);
 
   const table = toMenuTable(section);
 
   await deps.pool.query(
-    `INSERT INTO \`${table}\` (name, image_path, ingredients, choices)
-     VALUES (?, ?, CAST(? AS JSON), CAST(? AS JSON))`,
-    [name, path.basename(req.file.filename), JSON.stringify(ingredients), JSON.stringify(choices)]
+    `INSERT INTO \`${table}\` (name, image_path, ingredients, choices, notes)
+     VALUES (?, ?, CAST(? AS JSON), CAST(? AS JSON), ?)`,
+    [
+      name,
+      path.basename(req.file.filename),
+      JSON.stringify(ingredients),
+      JSON.stringify(choices),
+      notes,
+    ]
   );
 
   res.status(201).json({ ok: true });

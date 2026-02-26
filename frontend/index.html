@@ -11,6 +11,7 @@
       <div class="topbar__title">Меню ресторана — тренажёр</div>
       <div class="topbar__right">
         <button id="btnReload" class="btn btn--ghost" type="button">Обновить</button>
+        <button id="btnSettings" class="btn btn--ghost" type="button">Настройки</button>
         <button id="btnAddDish" class="btn" type="button">Добавить блюдо</button>
       </div>
     </header>
@@ -40,7 +41,7 @@
       <section class="content">
         <div class="content__head">
           <h2 id="activeSectionTitle">Карточки</h2>
-          <div class="content__hint">Изображение видно всегда. Название скрыто. Описание под спойлером.</div>
+          <div class="content__hint">Нажми на картинку — fullscreen. Скрытия управляются в “Настройки”.</div>
         </div>
 
         <div id="cards" class="cards"></div>
@@ -48,6 +49,7 @@
       </section>
     </main>
 
+    <!-- Add dish -->
     <dialog id="dlgAddDish" class="dialog">
       <form id="formAddDish" class="form" method="dialog">
         <div class="dialog__head">
@@ -80,11 +82,49 @@
           <textarea name="choices" rows="5" placeholder="Соус: томатный&#10;Соус: сливочный"></textarea>
         </label>
 
+        <label class="field">
+          <div class="field__label">Заметки</div>
+          <textarea name="notes" rows="3" placeholder="Например: подаётся холодным / без глютена / запомнить соус"></textarea>
+        </label>
+
         <div class="form__actions">
           <button class="btn" type="submit">Сохранить</button>
           <div id="dishMsg" class="msg"></div>
         </div>
       </form>
+    </dialog>
+
+    <!-- Settings -->
+    <dialog id="dlgSettings" class="dialog">
+      <form id="formSettings" class="form" method="dialog">
+        <div class="dialog__head">
+          <div class="dialog__title">Настройки</div>
+          <button class="btn btn--ghost" value="cancel" type="submit">Закрыть</button>
+        </div>
+
+        <label class="check">
+          <input id="setHideName" type="checkbox" />
+          <span>Скрывать название (*** вместо названия)</span>
+        </label>
+
+        <label class="check">
+          <input id="setHideDesc" type="checkbox" />
+          <span>Скрывать описание (под спойлером)</span>
+        </label>
+
+        <div class="form__actions">
+          <button class="btn" value="ok" type="submit">Применить</button>
+          <div class="msg">Сохраняется локально в браузере.</div>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- Fullscreen image -->
+    <dialog id="dlgImage" class="dialog dialog--fullscreen">
+      <div class="fs">
+        <img id="fsImg" class="fs__img" alt="" />
+        <button id="fsClose" class="btn btn--ghost fs__close" type="button">Закрыть</button>
+      </div>
     </dialog>
 
     <script src="/app.js"></script>

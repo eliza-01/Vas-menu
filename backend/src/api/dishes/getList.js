@@ -10,7 +10,7 @@ async function handle(req, res, deps) {
   const table = toMenuTable(slug);
 
   const [rows] = await deps.pool.query(
-    `SELECT id, name, image_path, ingredients, choices, created_at
+    `SELECT id, name, image_path, ingredients, choices, notes, created_at
      FROM \`${table}\` ORDER BY id DESC LIMIT 200`
   );
 
@@ -22,6 +22,7 @@ async function handle(req, res, deps) {
       imageUrl: `${base}/uploads/${r.image_path}`,
       ingredients: r.ingredients || [],
       choices: r.choices || [],
+      notes: r.notes || "",
       createdAt: r.created_at,
     }))
   );

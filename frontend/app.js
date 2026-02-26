@@ -1,12 +1,18 @@
 /**
- * Frontend: sections + cards + add forms.
+ * Frontend: sections + cards + add forms + settings + fullscreen image.
  */
 const $ = (id) => document.getElementById(id);
+
+const STORAGE_KEY = "rmt_settings_v1";
 
 const state = {
   sections: [],
   active: null,
-  reveal: new Set(), // dish id
+  reveal: new Set(), // dish id (used only when hideName enabled)
+  settings: {
+    hideName: true,
+    hideDesc: true,
+  },
 };
 
 async function api(path, opts) {
@@ -15,6 +21,20 @@ async function api(path, opts) {
   const data = ct.includes("application/json") ? await res.json() : await res.text();
   if (!res.ok) throw new Error(data?.error || String(data));
   return data;
+}
+
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const s = JSON.parse(raw);
+    state.settings.hideName = !!s.hideName;
+    state.settings.hideDesc = !!s.hideDesc;
+  } catch (_) {}
+}
+
+function saveSettings() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.settings));
 }
 
 function starName(name) {
@@ -65,6 +85,7 @@ function renderCards(cards) {
     img.className = "card__img";
     img.src = d.imageUrl;
     img.alt = "";
+    img.onclick = () => openFullscreen(d.imageUrl);
 
     const body = document.createElement("div");
     body.className = "card__body";
@@ -75,46 +96,70 @@ function renderCards(cards) {
     const name = document.createElement("div");
     name.className = "card__name";
 
-    const isRevealed = state.reveal.has(d.id);
-    name.textContent = isRevealed ? d.name : starName(d.name);
-
-    const toggle = document.createElement("button");
-    toggle.className = "btn btn--ghost";
-    toggle.type = "button";
-    toggle.textContent = isRevealed ? "Скрыть" : "Показать";
-    toggle.onclick = () => {
-      if (state.reveal.has(d.id)) state.reveal.delete(d.id);
-      else state.reveal.add(d.id);
-      loadCards();
-    };
+    const showName = !state.settings.hideName || state.reveal.has(d.id);
+    name.textContent = showName ? d.name : starName(d.name);
 
     nameRow.appendChild(name);
-    nameRow.appendChild(toggle);
+
+    if (state.settings.hideName) {
+      const toggle = document.createElement("button");
+      toggle.className = "btn btn--ghost";
+      toggle.type = "button";
+      toggle.textContent = state.reveal.has(d.id) ? "Скрыть" : "Показать";
+      toggle.onclick = () => {
+        if (state.reveal.has(d.id)) state.reveal.delete(d.id);
+        else state.reveal.add(d.id);
+        loadCards();
+      };
+      nameRow.appendChild(toggle);
+    }
 
     const meta = document.createElement("div");
     meta.className = "card__meta";
     meta.textContent = `#${d.id}`;
 
-    const details = document.createElement("details");
-    details.className = "details";
-
-    const summary = document.createElement("summary");
-    summary.textContent = "Описание";
-
-    const wrap = document.createElement("div");
-    wrap.innerHTML = `
-      <div class="card__meta" style="margin-top:8px;">Ингредиенты</div>
-      ${renderUl(d.ingredients)}
-      <div class="card__meta" style="margin-top:8px;">На выбор</div>
-      ${renderUl(d.choices)}
-    `;
-
-    details.appendChild(summary);
-    details.appendChild(wrap);
-
     body.appendChild(nameRow);
     body.appendChild(meta);
-    body.appendChild(details);
+
+    if (state.settings.hideDesc) {
+      const details = document.createElement("details");
+      details.className = "details";
+
+      const summary = document.createElement("summary");
+      summary.textContent = "Описание";
+
+      const wrap = document.createElement("div");
+      wrap.innerHTML = `
+        <div class="card__meta" style="margin-top:8px;">Ингредиенты</div>
+        ${renderUl(d.ingredients)}
+        <div class="card__meta" style="margin-top:8px;">На выбор</div>
+        ${renderUl(d.choices)}
+      `;
+
+      details.appendChild(summary);
+      details.appendChild(wrap);
+      body.appendChild(details);
+    } else {
+      const wrap = document.createElement("div");
+      wrap.innerHTML = `
+        <div class="card__meta" style="margin-top:8px;">Ингредиенты</div>
+        ${renderUl(d.ingredients)}
+        <div class="card__meta" style="margin-top:8px;">На выбор</div>
+        ${renderUl(d.choices)}
+      `;
+      body.appendChild(wrap);
+    }
+
+    const notes = String(d.notes || "").trim();
+    if (notes) {
+      const n = document.createElement("div");
+      n.className = "card__notes";
+      n.innerHTML = `
+        <div class="card__notesTitle">Заметки</div>
+        <div class="card__notesText">${escapeHtml(notes)}</div>
+      `;
+      body.appendChild(n);
+    }
 
     card.appendChild(img);
     card.appendChild(body);
@@ -203,15 +248,57 @@ async function onAddSection(ev) {
   }
 }
 
+function openSettings() {
+  $("setHideName").checked = state.settings.hideName;
+  $("setHideDesc").checked = state.settings.hideDesc;
+  $("dlgSettings").showModal();
+}
+
+function applySettings() {
+  state.settings.hideName = $("setHideName").checked;
+  state.settings.hideDesc = $("setHideDesc").checked;
+
+  if (!state.settings.hideName) state.reveal.clear(); // больше не нужно
+
+  saveSettings();
+  loadCards();
+}
+
+function openFullscreen(url) {
+  $("fsImg").src = url;
+  const dlg = $("dlgImage");
+  dlg.showModal();
+}
+
+function closeFullscreen() {
+  const dlg = $("dlgImage");
+  dlg.close();
+  $("fsImg").src = "";
+}
+
 async function boot() {
+  loadSettings();
+
   $("btnReload").onclick = async () => {
     await loadSections();
     await loadCards();
   };
   $("btnAddDish").onclick = openAddDish;
+  $("btnSettings").onclick = openSettings;
 
   $("formAddDish").addEventListener("submit", onAddDish);
   $("formAddSection").addEventListener("submit", onAddSection);
+
+  $("formSettings").addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    applySettings();
+    $("dlgSettings").close();
+  });
+
+  $("fsClose").onclick = closeFullscreen;
+  $("dlgImage").addEventListener("click", (ev) => {
+    if (ev.target === $("dlgImage")) closeFullscreen();
+  });
 
   await loadSections();
 }

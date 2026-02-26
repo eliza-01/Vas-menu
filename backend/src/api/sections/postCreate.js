@@ -24,6 +24,7 @@ async function handle(req, res, deps) {
       image_path VARCHAR(255) NOT NULL,
       ingredients JSON NOT NULL,
       choices JSON NOT NULL,
+      notes VARCHAR(2000) NOT NULL DEFAULT '',
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY (id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
