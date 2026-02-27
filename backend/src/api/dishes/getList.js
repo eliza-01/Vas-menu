@@ -13,7 +13,7 @@ async function handle(req, res, deps) {
 
   const [rows] = await deps.pool.query(
     `SELECT id, name, image_path, ingredients, choices, notes, created_at
-     FROM \`${table}\` ORDER BY id ASC LIMIT 200`
+     FROM \`${table}\` ORDER BY sort_order ASC, id ASC LIMIT 200`
   );
 
   res.json(

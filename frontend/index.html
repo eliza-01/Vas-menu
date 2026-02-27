@@ -15,9 +15,10 @@
     <header class="topbar">
       <div class="topbar__title">Меню</div>
       <div class="topbar__right">
-        <button id="btnReload" class="btn btn--ghost" type="button">Обновить</button>
+        <button id="btnReload" class="btn btn--ghost hide" type="button">Обновить</button>
         <button id="btnSettings" class="btn btn--ghost" type="button">Настройки</button>
         <button id="btnAddDish" class="btn" type="button">Добавить блюдо</button>
+        <button id="btnPriority" class="btn btn--ghost" type="button">Приоритет</button>
       </div>
     </header>
 
@@ -59,7 +60,7 @@
       <form id="formAddDish" class="form" method="dialog">
         <div class="dialog__head">
           <div class="dialog__title">Добавить блюдо</div>
-          <button class="btn btn--ghost" value="cancel" type="submit">Закрыть</button>
+          <button class="btn btn--ghost" type="submit" value="cancel" formnovalidate>Закрыть</button>
         </div>
 
         <label class="field">
@@ -129,6 +130,23 @@
       <div class="fs">
         <img id="fsImg" class="fs__img" alt="" />
         <button id="fsClose" class="btn btn--ghost fs__close" type="button">Закрыть</button>
+      </div>
+    </dialog>
+
+    <dialog id="dlgPriority" class="dialog">
+      <div class="dialog__head">
+        <div class="dialog__title">Приоритет (перетаскивай, затем Сохранить)</div>
+        <button id="btnPriorityClose" class="btn btn--ghost" type="button">Закрыть</button>
+      </div>
+
+      <div class="form" style="padding:12px;">
+        <div id="priorityMsg" class="msg"></div>
+        <ul id="priorityList" class="prio"></ul>
+
+        <div class="form__actions">
+          <button id="btnPrioritySave" class="btn" type="button">Сохранить</button>
+          <div class="msg">Пересчитывает порядок (sort_order).</div>
+        </div>
       </div>
     </dialog>
 

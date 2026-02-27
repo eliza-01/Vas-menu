@@ -14,6 +14,8 @@ const state = {
     hideName: true,
     hideDesc: true,
   },
+  priorityItems: [],
+  prioDrag: null, // pointer-sort state
 };
 
 const API_BASE = new URL("api/", document.baseURI); // => https://host/vas-menu/api/
@@ -218,6 +220,30 @@ function escapeHtml(s) {
   }[c]));
 }
 
+/** allow closing modal by clicking backdrop */
+function enableBackdropClose(dlg) {
+  dlg.addEventListener("click", (ev) => {
+    if (ev.target === dlg) dlg.close();
+  });
+}
+
+/** detect “cancel/close” submit buttons inside forms */
+function isCancelSubmitter(btn) {
+  if (!btn) return false;
+
+  const ds = btn.dataset || {};
+  if (ds.close === "1" || ds.action === "close") return true;
+
+  const v = String(btn.value || "").trim().toLowerCase();
+  if (v === "cancel" || v === "close") return true;
+
+  const n = String(btn.name || "").trim().toLowerCase();
+  if (n === "cancel" || n === "close") return true;
+
+  const t = String(btn.textContent || "").trim().toLowerCase();
+  return t === "закрыть" || t === "отмена" || t === "cancel" || t === "close";
+}
+
 async function loadSections() {
   state.sections = await api("/api/sections");
   renderSections();
@@ -225,7 +251,7 @@ async function loadSections() {
 
 async function setActiveSection(slug) {
   state.active = state.sections.find((s) => s.slug === slug) || null;
-  $("activeSectionTitle").textContent = state.active ? `Карточки — ${state.active.title}` : "Карточки";
+  $("activeSectionTitle").textContent = state.active ? `${state.active.title}` : "Карточки";
   renderSections();
   await loadCards();
 }
@@ -247,6 +273,14 @@ function openAddDish() {
 
 async function onAddDish(ev) {
   ev.preventDefault();
+
+  // IMPORTANT: if “close/cancel” button was clicked, just close (no validation / no API call)
+  if (isCancelSubmitter(ev.submitter)) {
+    $("dishMsg").textContent = "";
+    $("dlgAddDish").close();
+    return;
+  }
+
   $("dishMsg").textContent = "Сохраняю...";
 
   const form = ev.target;
@@ -319,6 +353,12 @@ async function boot() {
   $("btnAddDish").onclick = openAddDish;
   $("btnSettings").onclick = openSettings;
 
+  // make add-dish dialog always closable
+  enableBackdropClose($("dlgAddDish"));
+  $("dlgAddDish").addEventListener("close", () => {
+    $("dishMsg").textContent = "";
+  });
+
   $("formAddDish").addEventListener("submit", onAddDish);
   $("formAddSection").addEventListener("submit", onAddSection);
 
@@ -333,7 +373,234 @@ async function boot() {
     if (ev.target === $("dlgImage")) closeFullscreen();
   });
 
+  $("btnPriority").onclick = openPriority;
+  $("btnPriorityClose").onclick = closePriority;
+  $("btnPrioritySave").onclick = savePriority;
+
   await loadSections();
+}
+
+async function openPriority() {
+  if (!state.active) return;
+  $("priorityMsg").textContent = "Загружаю...";
+  $("dlgPriority").showModal();
+
+  try {
+    const items = await api(`/api/priority?section=${encodeURIComponent(state.active.slug)}`);
+    if (!Array.isArray(items)) throw new Error("API вернул не список (проверь маршрут /api/priority)");
+    state.priorityItems = items.map((x) => ({ id: Number(x.id), name: String(x.name || "") }));
+    renderPriority();
+    $("priorityMsg").textContent = "";
+  } catch (e) {
+    $("priorityMsg").textContent = e.message;
+  }
+}
+
+function closePriority() {
+  $("dlgPriority").close();
+}
+
+/* ===== priority drag (pointer + ghost + placeholder + FLIP) ===== */
+
+function prioFlip(ul, mutate) {
+  const els = Array.from(ul.children).filter(
+    (x) => x?.classList?.contains("prio__item") || x?.classList?.contains("prio__placeholder")
+  );
+  const first = new Map(els.map((el) => [el, el.getBoundingClientRect()]));
+  mutate();
+  const last = new Map(els.map((el) => [el, el.getBoundingClientRect()]));
+
+  for (const el of els) {
+    const f = first.get(el);
+    const l = last.get(el);
+    if (!f || !l) continue;
+
+    const dx = f.left - l.left;
+    const dy = f.top - l.top;
+    if (!dx && !dy) continue;
+
+    el.style.transition = "transform 0s";
+    el.style.transform = `translate(${dx}px, ${dy}px)`;
+    requestAnimationFrame(() => {
+      el.style.transition = "";
+      el.style.transform = "";
+    });
+  }
+}
+
+function prioBeforeElByPointer(ul, yClient) {
+  const items = Array.from(ul.querySelectorAll(".prio__item:not(.prio__item--dragging)"));
+  for (const it of items) {
+    const r = it.getBoundingClientRect();
+    if (yClient < r.top + r.height / 2) return it;
+  }
+  return null;
+}
+
+function prioIndexFromPlaceholder(ul, ph) {
+  let idx = 0;
+  for (const ch of Array.from(ul.children)) {
+    if (ch === ph) break;
+    if (ch?.classList?.contains("prio__item") && !ch.classList.contains("prio__item--dragging")) idx++;
+  }
+  return idx;
+}
+
+function prioAutoScroll(ul, ulRect, yClient) {
+  const pad = 28;
+  const top = ulRect.top + pad;
+  const bottom = ulRect.bottom - pad;
+  if (yClient < top) ul.scrollTop -= Math.min(24, top - yClient);
+  else if (yClient > bottom) ul.scrollTop += Math.min(24, yClient - bottom);
+}
+
+function renderPriority() {
+  const ul = $("priorityList");
+  ul.innerHTML = "";
+
+  state.priorityItems.forEach((it) => {
+    const li = document.createElement("li");
+    li.className = "prio__item";
+    li.dataset.id = String(it.id);
+
+    li.innerHTML = `
+      <div class="prio__row">
+        <div>${escapeHtml(it.name)}</div>
+        <div class="prio__id">#${it.id}</div>
+      </div>
+    `;
+
+    li.addEventListener("pointerdown", onPrioPointerDown);
+
+    ul.appendChild(li);
+  });
+}
+
+function onPrioPointerDown(ev) {
+  if (ev.button != null && ev.button !== 0) return;
+
+  const li = ev.currentTarget;
+  const ul = li.parentElement;
+  if (!ul || state.prioDrag) return;
+
+  ev.preventDefault();
+
+  const id = Number(li.dataset.id);
+  const fromIndex = state.priorityItems.findIndex((x) => x.id === id);
+  if (fromIndex < 0) return;
+
+  const ulRect = ul.getBoundingClientRect();
+  const r = li.getBoundingClientRect();
+  const offsetY = ev.clientY - r.top;
+  const offsetX = ev.clientX - r.left;
+
+  const ph = document.createElement("li");
+  ph.className = "prio__placeholder";
+  ph.style.height = `${r.height}px`;
+
+  ul.insertBefore(ph, li.nextSibling);
+
+  const ghost = li.cloneNode(true);
+  ghost.classList.add("prio__drag");
+  ghost.style.width = `${r.width}px`;
+  ghost.style.height = `${r.height}px`;
+  ghost.style.left = `${r.left - ulRect.left + ul.scrollLeft}px`;
+  ghost.style.top = `${r.top - ulRect.top + ul.scrollTop}px`;
+
+  ul.appendChild(ghost);
+
+  li.classList.add("prio__item--dragging");
+  document.body.classList.add("noSel");
+
+  state.prioDrag = {
+    ul,
+    li,
+    ph,
+    ghost,
+    fromIndex,
+    offsetY,
+    offsetX,
+    ulRect,
+  };
+
+  window.addEventListener("pointermove", onPrioPointerMove, { passive: false });
+  window.addEventListener("pointerup", onPrioPointerUp, { once: true });
+  window.addEventListener("pointercancel", onPrioPointerUp, { once: true });
+}
+
+function onPrioPointerMove(ev) {
+  const d = state.prioDrag;
+  if (!d) return;
+
+  ev.preventDefault();
+
+  d.ulRect = d.ul.getBoundingClientRect();
+  prioAutoScroll(d.ul, d.ulRect, ev.clientY);
+
+  const left = ev.clientX - d.ulRect.left + d.ul.scrollLeft - d.offsetX;
+  const top = ev.clientY - d.ulRect.top + d.ul.scrollTop - d.offsetY;
+
+  d.ghost.style.left = `${left}px`;
+  d.ghost.style.top = `${top}px`;
+
+  const before = prioBeforeElByPointer(d.ul, ev.clientY);
+
+  const curNext = d.ph.nextElementSibling;
+  if (before === d.ph) return;
+  if (before === curNext) return;
+  if (!before && d.ph === d.ul.lastElementChild) return;
+
+  prioFlip(d.ul, () => {
+    if (before) d.ul.insertBefore(d.ph, before);
+    else d.ul.appendChild(d.ph);
+  });
+}
+
+function onPrioPointerUp() {
+  const d = state.prioDrag;
+  if (!d) return;
+
+  window.removeEventListener("pointermove", onPrioPointerMove);
+
+  const toIndex = prioIndexFromPlaceholder(d.ul, d.ph);
+  const fromIndex = d.fromIndex;
+
+  d.ghost.remove();
+  d.ph.remove();
+  document.body.classList.remove("noSel");
+
+  if (fromIndex !== toIndex && fromIndex >= 0 && toIndex >= 0) {
+    const arr = state.priorityItems;
+    const [moved] = arr.splice(fromIndex, 1);
+    arr.splice(toIndex, 0, moved);
+  }
+
+  state.prioDrag = null;
+  renderPriority();
+}
+
+/* ===== /priority drag ===== */
+
+async function savePriority() {
+  if (!state.active) return;
+  $("priorityMsg").textContent = "Сохраняю...";
+
+  try {
+    await api("/api/priority", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        section: state.active.slug,
+        order: state.priorityItems.map((x) => x.id),
+      }),
+    });
+
+    $("priorityMsg").textContent = "Готово.";
+    $("dlgPriority").close();
+    await loadCards(); // перечитать карточки (id поменялись)
+  } catch (e) {
+    $("priorityMsg").textContent = e.message;
+  }
 }
 
 boot().catch((e) => {

@@ -19,6 +19,9 @@ const { registerSectionsCreatePost } = require("./api/sections/postCreate");
 const { registerDishesListGet } = require("./api/dishes/getList");
 const { registerDishesCreatePost } = require("./api/dishes/postCreate");
 
+const { registerPriorityListGet } = require("./api/priority/getList");
+const { registerPrioritySavePost } = require("./api/priority/postSave");
+
 async function main() {
   const env = loadEnv();
 
@@ -45,6 +48,9 @@ async function main() {
   registerSectionsCreatePost(api, deps);
   registerDishesListGet(api, deps);
   registerDishesCreatePost(api, deps);
+
+  registerPriorityListGet(api, deps);
+  registerPrioritySavePost(api, deps);
 
   app.use(api);
   app.use("/vas-menu", api);

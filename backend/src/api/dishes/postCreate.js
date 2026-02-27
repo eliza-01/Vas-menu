@@ -23,15 +23,21 @@ async function handle(req, res, deps) {
 
   const table = toMenuTable(section);
 
+  const [[m]] = await deps.pool.query(
+    `SELECT COALESCE(MAX(sort_order), 0) AS mx FROM \`${table}\``
+  );
+  const sortOrder = Number(m?.mx || 0) + 1;
+
   await deps.pool.query(
-    `INSERT INTO \`${table}\` (name, image_path, ingredients, choices, notes)
-     VALUES (?, ?, CAST(? AS JSON), CAST(? AS JSON), ?)`,
+    `INSERT INTO \`${table}\` (name, image_path, ingredients, choices, notes, sort_order)
+     VALUES (?, ?, CAST(? AS JSON), CAST(? AS JSON), ?, ?)`,
     [
       name,
       path.basename(req.file.filename),
       JSON.stringify(ingredients),
       JSON.stringify(choices),
       notes,
+      sortOrder,
     ]
   );
 

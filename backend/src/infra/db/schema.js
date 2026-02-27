@@ -1,6 +1,5 @@
-﻿// backend/src/infra/db/schema.js
-/**
- * Minimal schema bootstrap: sections table + menu_<slug> tables + lightweight migrations.
+﻿/**
+ * DB schema bootstrap + migrations for menu_* tables (notes + sort_order).
  */
 const { toMenuTable } = require("../../domain/sections/slug");
 
@@ -16,8 +15,8 @@ async function ensureSchema(pool) {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
-  const [rows] = await pool.query("SELECT COUNT(*) AS cnt FROM sections");
-  if (Number(rows?.[0]?.cnt || 0) === 0) {
+  const [[c]] = await pool.query("SELECT COUNT(*) AS cnt FROM sections");
+  if (Number(c?.cnt || 0) === 0) {
     await pool.query(
       "INSERT INTO sections (title, slug) VALUES (?, ?), (?, ?), (?, ?), (?, ?)",
       ["Закуски", "snacks", "Салаты", "salads", "Горячие блюда", "mains", "Десерты", "desserts"]
@@ -36,12 +35,18 @@ async function ensureSchema(pool) {
         ingredients JSON NOT NULL,
         choices JSON NOT NULL,
         notes VARCHAR(2000) NOT NULL DEFAULT '',
+        sort_order INT UNSIGNED NOT NULL DEFAULT 0,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (id)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
     await ensureColumn(pool, table, "notes", "VARCHAR(2000) NOT NULL DEFAULT ''");
+    const addedSort = await ensureColumn(pool, table, "sort_order", "INT UNSIGNED NOT NULL DEFAULT 0");
+
+    if (addedSort || (await isSortOrderAllZero(pool, table))) {
+      await initSortOrder(pool, table);
+    }
   }
 }
 
@@ -56,8 +61,32 @@ async function ensureColumn(pool, table, column, ddl) {
     [table, column]
   );
 
-  if (rows.length) return;
+  if (rows.length) return false;
   await pool.query(`ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` ${ddl}`);
+  return true;
+}
+
+async function isSortOrderAllZero(pool, table) {
+  const [[r]] = await pool.query(
+    `SELECT COUNT(*) AS cnt,
+            SUM(CASE WHEN sort_order = 0 THEN 1 ELSE 0 END) AS zeros
+     FROM \`${table}\``
+  );
+
+  const cnt = Number(r?.cnt || 0);
+  const zeros = Number(r?.zeros || 0);
+  return cnt > 0 && zeros === cnt;
+}
+
+async function initSortOrder(pool, table) {
+  await pool.query(
+    `UPDATE \`${table}\` t
+     JOIN (
+       SELECT id, ROW_NUMBER() OVER (ORDER BY id ASC) AS rn
+       FROM \`${table}\`
+     ) x ON x.id = t.id
+     SET t.sort_order = x.rn`
+  );
 }
 
 module.exports = { ensureSchema };
