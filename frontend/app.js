@@ -152,7 +152,7 @@ function renderCards(cards) {
     }
 
     const meta = document.createElement("div");
-    meta.className = "card__meta";
+    meta.className = "card__meta hide";
     meta.textContent = `#${d.id}`;
 
     body.appendChild(nameRow);
@@ -169,8 +169,7 @@ function renderCards(cards) {
       wrap.innerHTML = `
         <div class="card__meta" style="margin-top:8px;">Ингредиенты</div>
         ${renderUl(d.ingredients)}
-        <div class="card__meta" style="margin-top:8px;">На выбор</div>
-        ${renderUl(d.choices)}
+        ${renderChoicesBlock(d.choices)}
       `;
 
       details.appendChild(summary);
@@ -181,8 +180,7 @@ function renderCards(cards) {
       wrap.innerHTML = `
         <div class="card__meta" style="margin-top:8px;">Ингредиенты</div>
         ${renderUl(d.ingredients)}
-        <div class="card__meta" style="margin-top:8px;">На выбор</div>
-        ${renderUl(d.choices)}
+        ${renderChoicesBlock(d.choices)}
       `;
       body.appendChild(wrap);
     }
@@ -206,8 +204,18 @@ function renderCards(cards) {
 
 function renderUl(items) {
   const list = Array.isArray(items) ? items : [];
-  if (list.length === 0) return `<div class="card__meta">—</div>`;
+  if (list.length === 0) return `<div class="card__meta hide">—</div>`;
   return `<ul class="card__list">${list.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>`;
+}
+
+// добавь рядом с renderUl (выше/ниже — не важно)
+function renderChoicesBlock(items) {
+  const list = Array.isArray(items) ? items : [];
+  if (list.length === 0) return "";
+  return `
+    <div class="card__meta" style="margin-top:8px;">На выбор</div>
+    ${renderUl(list)}
+  `;
 }
 
 function escapeHtml(s) {
