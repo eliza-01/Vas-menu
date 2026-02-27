@@ -465,12 +465,15 @@ function renderPriority() {
 
     li.innerHTML = `
       <div class="prio__row">
-        <div>${escapeHtml(it.name)}</div>
+        <div class="prio__left">
+          <button type="button" class="prio__handle" aria-label="Перетащить" title="Перетащить"></button>
+          <div class="prio__name">${escapeHtml(it.name)}</div>
+        </div>
         <div class="prio__id">#${it.id}</div>
       </div>
     `;
 
-    li.addEventListener("pointerdown", onPrioPointerDown);
+    li.querySelector(".prio__handle")?.addEventListener("pointerdown", onPrioPointerDown);
 
     ul.appendChild(li);
   });
@@ -479,11 +482,15 @@ function renderPriority() {
 function onPrioPointerDown(ev) {
   if (ev.button != null && ev.button !== 0) return;
 
-  const li = ev.currentTarget;
-  const ul = li.parentElement;
-  if (!ul || state.prioDrag) return;
+  const handle = ev.currentTarget;
+  if (!handle?.classList?.contains("prio__handle")) return;
+
+  const li = handle.closest(".prio__item");
+  const ul = li?.parentElement;
+  if (!li || !ul || state.prioDrag) return;
 
   ev.preventDefault();
+  ev.stopPropagation();
 
   const id = Number(li.dataset.id);
   const fromIndex = state.priorityItems.findIndex((x) => x.id === id);

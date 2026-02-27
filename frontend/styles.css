@@ -94,9 +94,8 @@ summary { cursor: pointer; width: max-content;
   border-radius:12px;
   border:1px solid var(--line);
   background:#0b1220;
-  cursor:grab;
-  user-select:none;
-  touch-action:none;
+  cursor:default;
+  user-select:text;
   transition: transform 140ms ease;
 }
 
@@ -105,6 +104,41 @@ summary { cursor: pointer; width: max-content;
 }
 
 .prio__row{ display:flex; justify-content:space-between; align-items:center; gap:10px; }
+.prio__left{ display:flex; align-items:center; gap:10px; min-width: 0; }
+.prio__name{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+.prio__handle{
+  appearance:none;
+  border:1px solid var(--line);
+  background:transparent;
+  color: var(--muted);
+  width:32px;
+  height:32px;
+  border-radius:12px;
+  display:grid;
+  place-items:center;
+  padding:0;
+  cursor:grab;
+  user-select:none;
+  touch-action:none;
+}
+.prio__handle::before{
+  content:"";
+  width:14px;
+  height:12px;
+  margin: 0 8px;
+  background:
+    linear-gradient(currentColor 0 0) 0 0/14px 2px no-repeat,
+    linear-gradient(currentColor 0 0) 0 5px/14px 2px no-repeat,
+    linear-gradient(currentColor 0 0) 0 10px/14px 2px no-repeat;
+  opacity:.9;
+}
+.prio__handle:active{ cursor:grabbing; }
+.prio__handle:focus-visible{
+  outline: 2px solid rgba(96,165,250,.45);
+  outline-offset: 2px;
+}
+
 .prio__id{ color:var(--muted); font-size:12px; }
 
 .prio__placeholder{

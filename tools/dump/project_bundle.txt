@@ -110,7 +110,7 @@ const state = {
     hideDesc: true,
   },
   priorityItems: [],
-  prioDragFrom: null,
+  prioDrag: null, // pointer-sort state
 };
 
 const API_BASE = new URL("api/", document.baseURI); // => https://host/vas-menu/api/
@@ -315,6 +315,30 @@ function escapeHtml(s) {
   }[c]));
 }
 
+/** allow closing modal by clicking backdrop */
+function enableBackdropClose(dlg) {
+  dlg.addEventListener("click", (ev) => {
+    if (ev.target === dlg) dlg.close();
+  });
+}
+
+/** detect “cancel/close” submit buttons inside forms */
+function isCancelSubmitter(btn) {
+  if (!btn) return false;
+
+  const ds = btn.dataset || {};
+  if (ds.close === "1" || ds.action === "close") return true;
+
+  const v = String(btn.value || "").trim().toLowerCase();
+  if (v === "cancel" || v === "close") return true;
+
+  const n = String(btn.name || "").trim().toLowerCase();
+  if (n === "cancel" || n === "close") return true;
+
+  const t = String(btn.textContent || "").trim().toLowerCase();
+  return t === "закрыть" || t === "отмена" || t === "cancel" || t === "close";
+}
+
 async function loadSections() {
   state.sections = await api("/api/sections");
   renderSections();
@@ -344,6 +368,14 @@ function openAddDish() {
 
 async function onAddDish(ev) {
   ev.preventDefault();
+
+  // IMPORTANT: if “close/cancel” button was clicked, just close (no validation / no API call)
+  if (isCancelSubmitter(ev.submitter)) {
+    $("dishMsg").textContent = "";
+    $("dlgAddDish").close();
+    return;
+  }
+
   $("dishMsg").textContent = "Сохраняю...";
 
   const form = ev.target;
@@ -416,6 +448,12 @@ async function boot() {
   $("btnAddDish").onclick = openAddDish;
   $("btnSettings").onclick = openSettings;
 
+  // make add-dish dialog always closable
+  enableBackdropClose($("dlgAddDish"));
+  $("dlgAddDish").addEventListener("close", () => {
+    $("dishMsg").textContent = "";
+  });
+
   $("formAddDish").addEventListener("submit", onAddDish);
   $("formAddSection").addEventListener("submit", onAddSection);
 
@@ -457,15 +495,68 @@ function closePriority() {
   $("dlgPriority").close();
 }
 
+/* ===== priority drag (pointer + ghost + placeholder + FLIP) ===== */
+
+function prioFlip(ul, mutate) {
+  const els = Array.from(ul.children).filter(
+    (x) => x?.classList?.contains("prio__item") || x?.classList?.contains("prio__placeholder")
+  );
+  const first = new Map(els.map((el) => [el, el.getBoundingClientRect()]));
+  mutate();
+  const last = new Map(els.map((el) => [el, el.getBoundingClientRect()]));
+
+  for (const el of els) {
+    const f = first.get(el);
+    const l = last.get(el);
+    if (!f || !l) continue;
+
+    const dx = f.left - l.left;
+    const dy = f.top - l.top;
+    if (!dx && !dy) continue;
+
+    el.style.transition = "transform 0s";
+    el.style.transform = `translate(${dx}px, ${dy}px)`;
+    requestAnimationFrame(() => {
+      el.style.transition = "";
+      el.style.transform = "";
+    });
+  }
+}
+
+function prioBeforeElByPointer(ul, yClient) {
+  const items = Array.from(ul.querySelectorAll(".prio__item:not(.prio__item--dragging)"));
+  for (const it of items) {
+    const r = it.getBoundingClientRect();
+    if (yClient < r.top + r.height / 2) return it;
+  }
+  return null;
+}
+
+function prioIndexFromPlaceholder(ul, ph) {
+  let idx = 0;
+  for (const ch of Array.from(ul.children)) {
+    if (ch === ph) break;
+    if (ch?.classList?.contains("prio__item") && !ch.classList.contains("prio__item--dragging")) idx++;
+  }
+  return idx;
+}
+
+function prioAutoScroll(ul, ulRect, yClient) {
+  const pad = 28;
+  const top = ulRect.top + pad;
+  const bottom = ulRect.bottom - pad;
+  if (yClient < top) ul.scrollTop -= Math.min(24, top - yClient);
+  else if (yClient > bottom) ul.scrollTop += Math.min(24, yClient - bottom);
+}
+
 function renderPriority() {
   const ul = $("priorityList");
   ul.innerHTML = "";
 
-  state.priorityItems.forEach((it, idx) => {
+  state.priorityItems.forEach((it) => {
     const li = document.createElement("li");
     li.className = "prio__item";
-    li.draggable = true;
-    li.dataset.index = String(idx);
+    li.dataset.id = String(it.id);
 
     li.innerHTML = `
       <div class="prio__row">
@@ -474,45 +565,116 @@ function renderPriority() {
       </div>
     `;
 
-    li.addEventListener("dragstart", onPrioDragStart);
-    li.addEventListener("dragover", onPrioDragOver);
-    li.addEventListener("drop", onPrioDrop);
-    li.addEventListener("dragend", onPrioDragEnd);
+    li.addEventListener("pointerdown", onPrioPointerDown);
 
     ul.appendChild(li);
   });
 }
 
-function onPrioDragStart(ev) {
-  const el = ev.currentTarget;
-  state.prioDragFrom = Number(el.dataset.index);
-  el.classList.add("prio__item--dragging");
-  ev.dataTransfer.effectAllowed = "move";
+function onPrioPointerDown(ev) {
+  if (ev.button != null && ev.button !== 0) return;
+
+  const li = ev.currentTarget;
+  const ul = li.parentElement;
+  if (!ul || state.prioDrag) return;
+
+  ev.preventDefault();
+
+  const id = Number(li.dataset.id);
+  const fromIndex = state.priorityItems.findIndex((x) => x.id === id);
+  if (fromIndex < 0) return;
+
+  const ulRect = ul.getBoundingClientRect();
+  const r = li.getBoundingClientRect();
+  const offsetY = ev.clientY - r.top;
+  const offsetX = ev.clientX - r.left;
+
+  const ph = document.createElement("li");
+  ph.className = "prio__placeholder";
+  ph.style.height = `${r.height}px`;
+
+  ul.insertBefore(ph, li.nextSibling);
+
+  const ghost = li.cloneNode(true);
+  ghost.classList.add("prio__drag");
+  ghost.style.width = `${r.width}px`;
+  ghost.style.height = `${r.height}px`;
+  ghost.style.left = `${r.left - ulRect.left + ul.scrollLeft}px`;
+  ghost.style.top = `${r.top - ulRect.top + ul.scrollTop}px`;
+
+  ul.appendChild(ghost);
+
+  li.classList.add("prio__item--dragging");
+  document.body.classList.add("noSel");
+
+  state.prioDrag = {
+    ul,
+    li,
+    ph,
+    ghost,
+    fromIndex,
+    offsetY,
+    offsetX,
+    ulRect,
+  };
+
+  window.addEventListener("pointermove", onPrioPointerMove, { passive: false });
+  window.addEventListener("pointerup", onPrioPointerUp, { once: true });
+  window.addEventListener("pointercancel", onPrioPointerUp, { once: true });
 }
 
-function onPrioDragOver(ev) {
+function onPrioPointerMove(ev) {
+  const d = state.prioDrag;
+  if (!d) return;
+
   ev.preventDefault();
-  ev.dataTransfer.dropEffect = "move";
+
+  d.ulRect = d.ul.getBoundingClientRect();
+  prioAutoScroll(d.ul, d.ulRect, ev.clientY);
+
+  const left = ev.clientX - d.ulRect.left + d.ul.scrollLeft - d.offsetX;
+  const top = ev.clientY - d.ulRect.top + d.ul.scrollTop - d.offsetY;
+
+  d.ghost.style.left = `${left}px`;
+  d.ghost.style.top = `${top}px`;
+
+  const before = prioBeforeElByPointer(d.ul, ev.clientY);
+
+  const curNext = d.ph.nextElementSibling;
+  if (before === d.ph) return;
+  if (before === curNext) return;
+  if (!before && d.ph === d.ul.lastElementChild) return;
+
+  prioFlip(d.ul, () => {
+    if (before) d.ul.insertBefore(d.ph, before);
+    else d.ul.appendChild(d.ph);
+  });
 }
 
-function onPrioDrop(ev) {
-  ev.preventDefault();
-  const to = Number(ev.currentTarget.dataset.index);
-  const from = state.prioDragFrom;
+function onPrioPointerUp() {
+  const d = state.prioDrag;
+  if (!d) return;
 
-  if (Number.isNaN(from) || Number.isNaN(to) || from === to) return;
+  window.removeEventListener("pointermove", onPrioPointerMove);
 
-  const arr = state.priorityItems;
-  const [moved] = arr.splice(from, 1);
-  arr.splice(to, 0, moved);
+  const toIndex = prioIndexFromPlaceholder(d.ul, d.ph);
+  const fromIndex = d.fromIndex;
 
-  state.prioDragFrom = null;
+  d.ghost.remove();
+  d.ph.remove();
+  document.body.classList.remove("noSel");
+
+  if (fromIndex !== toIndex && fromIndex >= 0 && toIndex >= 0) {
+    const arr = state.priorityItems;
+    const [moved] = arr.splice(fromIndex, 1);
+    arr.splice(toIndex, 0, moved);
+  }
+
+  state.prioDrag = null;
   renderPriority();
 }
 
-function onPrioDragEnd(ev) {
-  ev.currentTarget.classList.remove("prio__item--dragging");
-}
+/* ===== /priority drag ===== */
 
 async function savePriority() {
   if (!state.active) return;
@@ -560,7 +722,7 @@ boot().catch((e) => {
     <header class="topbar">
       <div class="topbar__title">Меню</div>
       <div class="topbar__right">
-        <button id="btnReload" class="btn btn--ghost" type="button">Обновить</button>
+        <button id="btnReload" class="btn btn--ghost hide" type="button">Обновить</button>
         <button id="btnSettings" class="btn btn--ghost" type="button">Настройки</button>
         <button id="btnAddDish" class="btn" type="button">Добавить блюдо</button>
         <button id="btnPriority" class="btn btn--ghost" type="button">Приоритет</button>
@@ -605,7 +767,7 @@ boot().catch((e) => {
       <form id="formAddDish" class="form" method="dialog">
         <div class="dialog__head">
           <div class="dialog__title">Добавить блюдо</div>
-          <button class="btn btn--ghost" value="cancel" type="submit">Закрыть</button>
+          <button class="btn btn--ghost" type="submit" value="cancel" formnovalidate>Закрыть</button>
         </div>
 
         <label class="field">
@@ -705,8 +867,12 @@ boot().catch((e) => {
 *{ box-sizing:border-box; }
 body{ margin:0; font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial; background:var(--bg); color:var(--text); }
 a{ color:inherit; }
+body.noSel{ user-select:none; }
 
-.topbar{ display:flex; justify-content:space-between; align-items:center; padding:14px 16px; border-bottom:1px solid var(--line); background:rgba(17,24,39,.72); backdrop-filter: blur(8px); position:sticky; top:0; z-index:5; }
+.hide {
+  display: none;
+}
+.topbar{ display:flex; gap:10px; justify-content:space-between; align-items:center; padding:14px 16px; border-bottom:1px solid var(--line); background:rgba(17,24,39,.72); backdrop-filter: blur(8px); position:sticky; top:0; z-index:5; }
 .topbar__title{ font-weight:700; }
 .topbar__right{ display:flex; gap:10px; }
 
@@ -758,7 +924,10 @@ textarea{ resize:vertical; }
 .empty{ color:var(--muted); margin-top:12px; }
 .hidden{ display:none; }
 
-summary { cursor: pointer; }
+summary { cursor: pointer; width: max-content;
+    border: 1px solid #343c47;
+    padding: 7px 10px;
+    border-radius: 12px;}
 
 .check{ display:flex; gap:10px; align-items:center; padding:10px; border:1px solid var(--line); border-radius:12px; background:#0b1220; }
 .check input{ width:auto; }
@@ -772,8 +941,47 @@ summary { cursor: pointer; }
   display: none;
 }
 
-.prio{ list-style:none; padding:0; margin:0; display:flex; flex-direction:column; gap:8px; }
-.prio__item{ padding:10px 12px; border-radius:12px; border:1px solid var(--line); background:#0b1220; cursor:grab; user-select:none; }
-.prio__item--dragging{ opacity:.6; cursor:grabbing; }
+.prio{
+  list-style:none;
+  padding:0;
+  margin:0;
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  position:relative;
+  max-height: min(60vh, 520px);
+  overflow:auto;
+}
+
+.prio__item{
+  padding:10px 12px;
+  border-radius:12px;
+  border:1px solid var(--line);
+  background:#0b1220;
+  cursor:grab;
+  user-select:none;
+  touch-action:none;
+  transition: transform 140ms ease;
+}
+
+.prio__item--dragging{
+  opacity:0;
+}
+
 .prio__row{ display:flex; justify-content:space-between; align-items:center; gap:10px; }
 .prio__id{ color:var(--muted); font-size:12px; }
+
+.prio__placeholder{
+  border-radius:12px;
+  border:1px dashed var(--line);
+  background: transparent;
+}
+
+.prio__drag{
+  position:absolute;
+  z-index:20;
+  pointer-events:none;
+  cursor:grabbing;
+  box-shadow: 0 10px 30px rgba(0,0,0,.45);
+  transform: translateZ(0);
+}
