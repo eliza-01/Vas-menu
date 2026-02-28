@@ -169,6 +169,7 @@ function renderCards(cards) {
       wrap.innerHTML = `
         <div class="card__meta" style="margin-top:8px;">Ингредиенты</div>
         ${renderUl(d.ingredients)}
+        ${renderDecorBlock(d.decor)}
         ${renderChoicesBlock(d.choices)}
       `;
 
@@ -180,6 +181,7 @@ function renderCards(cards) {
       wrap.innerHTML = `
         <div class="card__meta" style="margin-top:8px;">Ингредиенты</div>
         ${renderUl(d.ingredients)}
+        ${renderDecorBlock(d.decor)}
         ${renderChoicesBlock(d.choices)}
       `;
       body.appendChild(wrap);
@@ -209,6 +211,15 @@ function renderUl(items) {
 }
 
 // добавь рядом с renderUl (выше/ниже — не важно)
+function renderDecorBlock(items) {
+  const list = Array.isArray(items) ? items : [];
+  if (list.length === 0) return "";
+  return `
+    <div class="card__meta" style="margin-top:8px;">Декор</div>
+    ${renderUl(list)}
+  `;
+}
+
 function renderChoicesBlock(items) {
   const list = Array.isArray(items) ? items : [];
   if (list.length === 0) return "";

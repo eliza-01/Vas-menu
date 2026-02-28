@@ -1,5 +1,5 @@
 ﻿/**
- * DB schema bootstrap + migrations for menu_* tables (notes + sort_order).
+ * DB schema bootstrap + migrations for menu_* tables (decor + notes + sort_order).
  */
 const { toMenuTable } = require("../../domain/sections/slug");
 
@@ -33,6 +33,7 @@ async function ensureSchema(pool) {
         name VARCHAR(160) NOT NULL,
         image_path VARCHAR(255) NOT NULL,
         ingredients JSON NOT NULL,
+        decor JSON NOT NULL,
         choices JSON NOT NULL,
         notes VARCHAR(2000) NOT NULL DEFAULT '',
         sort_order INT UNSIGNED NOT NULL DEFAULT 0,
@@ -41,6 +42,7 @@ async function ensureSchema(pool) {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
+    await ensureJsonArrayNotNull(pool, table, "decor");
     await ensureColumn(pool, table, "notes", "VARCHAR(2000) NOT NULL DEFAULT ''");
     const addedSort = await ensureColumn(pool, table, "sort_order", "INT UNSIGNED NOT NULL DEFAULT 0");
 
@@ -63,6 +65,24 @@ async function ensureColumn(pool, table, column, ddl) {
 
   if (rows.length) return false;
   await pool.query(`ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` ${ddl}`);
+  return true;
+}
+
+async function ensureJsonArrayNotNull(pool, table, column) {
+  const [rows] = await pool.query(
+    `SELECT 1
+     FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = ?
+       AND COLUMN_NAME = ?
+     LIMIT 1`,
+    [table, column]
+  );
+  if (rows.length) return false;
+
+  await pool.query(`ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` JSON NULL`);
+  await pool.query(`UPDATE \`${table}\` SET \`${column}\` = JSON_ARRAY() WHERE \`${column}\` IS NULL`);
+  await pool.query(`ALTER TABLE \`${table}\` MODIFY COLUMN \`${column}\` JSON NOT NULL`);
   return true;
 }
 

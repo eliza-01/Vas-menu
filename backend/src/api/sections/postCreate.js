@@ -24,8 +24,10 @@ async function handle(req, res, deps) {
       name VARCHAR(160) NOT NULL,
       image_path VARCHAR(255) NOT NULL,
       ingredients JSON NOT NULL,
+      decor JSON NOT NULL,
       choices JSON NOT NULL,
       notes VARCHAR(2000) NOT NULL DEFAULT '',
+      sort_order INT UNSIGNED NOT NULL DEFAULT 0,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY (id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -29,6 +29,665 @@ docker compose restart app
 10. Комментарии в начале файла, максимально кратко и ясно, что он содержит.
 11. Самое важное в нашем проекте - скорость исполнения задач и расчетов.
 
+# backend/Dockerfile
+# Node webapp: API + static frontend. Forced linux/amd64 for Windows Docker Desktop.
+FROM --platform=linux/amd64 node:20-alpine
+
+WORKDIR /app
+
+COPY backend/package.json ./backend/package.json
+RUN cd backend && npm install --no-fund --no-audit
+
+COPY backend/src ./backend/src
+COPY frontend ./frontend
+
+EXPOSE 3000
+CMD ["node", "backend/src/index.js"]
+
+# backend/package.json
+{
+  "name": "restaurant-menu-trainer",
+  "private": true,
+  "version": "1.0.0",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "multer": "^1.4.5-lts.1",
+    "mysql2": "^3.11.0"
+  }
+}
+
+# backend/src/api/dishes/getList.js
+// backend/src/api/dishes/getList.js
+/**
+ * GET /api/dishes?section=<slug> -> dish cards
+ * imageUrl is relative (uploads/<file>) to avoid localhost/loopback issues behind tunnel.
+ */
+const { normalizeSlug, toMenuTable } = require("../../domain/sections/slug");
+
+async function handle(req, res, deps) {
+  const slug = normalizeSlug(req.query?.section);
+  if (!slug) return res.status(400).json({ error: "section is required" });
+
+  const table = toMenuTable(slug);
+
+  const [rows] = await deps.pool.query(
+    `SELECT id, name, image_path, ingredients, choices, notes, created_at
+     FROM \`${table}\` ORDER BY sort_order ASC, id ASC LIMIT 200`
+  );
+
+  res.json(
+    rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      // ВАЖНО: относительный путь.
+      // При открытии https://l2arena.su/vas-menu/ с <base href="/vas-menu/">
+      // это станет https://l2arena.su/vas-menu/uploads/<file>
+      imageUrl: `uploads/${r.image_path}`,
+      ingredients: r.ingredients || [],
+      choices: r.choices || [],
+      notes: r.notes || "",
+      createdAt: r.created_at,
+    }))
+  );
+}
+
+function registerDishesListGet(app, deps, basePath = "") {
+  app.get(`${basePath}/api/dishes`, (req, res, next) =>
+    handle(req, res, deps).catch(next)
+  );
+}
+
+module.exports = { registerDishesListGet };
+
+# backend/src/api/dishes/postCreate.js
+// backend/src/api/dishes/postCreate.js
+/**
+ * POST /api/dishes (multipart/form-data)
+ * Fields: section, name, ingredients, choices, notes, image
+ */
+const path = require("path");
+const { createImageUpload } = require("../../infra/storage/imageUpload");
+const { normalizeSlug, toMenuTable } = require("../../domain/sections/slug");
+const { parseLines } = require("../../domain/dishes/parseLines");
+
+async function handle(req, res, deps) {
+  const section = normalizeSlug(req.body?.section);
+  if (!section) return res.status(400).json({ error: "section is required" });
+
+  const name = String(req.body?.name || "").trim().slice(0, 160);
+  if (!name) return res.status(400).json({ error: "name is required" });
+
+  if (!req.file) return res.status(400).json({ error: "image is required" });
+
+  const ingredients = parseLines(req.body?.ingredients);
+  const choices = parseLines(req.body?.choices);
+  const notes = String(req.body?.notes || "").trim().slice(0, 2000);
+
+  const table = toMenuTable(section);
+
+  const [[m]] = await deps.pool.query(
+    `SELECT COALESCE(MAX(sort_order), 0) AS mx FROM \`${table}\``
+  );
+  const sortOrder = Number(m?.mx || 0) + 1;
+
+  await deps.pool.query(
+    `INSERT INTO \`${table}\` (name, image_path, ingredients, choices, notes, sort_order)
+     VALUES (?, ?, CAST(? AS JSON), CAST(? AS JSON), ?, ?)`,
+    [
+      name,
+      path.basename(req.file.filename),
+      JSON.stringify(ingredients),
+      JSON.stringify(choices),
+      notes,
+      sortOrder,
+    ]
+  );
+
+  res.status(201).json({ ok: true });
+}
+
+function registerDishesCreatePost(app, deps, basePath = "") {
+  const upload = createImageUpload(deps.env.uploadDir).single("image");
+
+  app.post(`${basePath}/api/dishes`, (req, res, next) =>
+    upload(req, res, (err) => {
+      if (err) return next(err);
+      handle(req, res, deps).catch(next);
+    })
+  );
+}
+
+module.exports = { registerDishesCreatePost };
+
+# backend/src/api/health/get.js
+// backend/src/api/health/get.js
+/**
+ * GET /api/health -> { ok: true }
+ */
+function registerHealthGet(app, deps, basePath = "") {
+  app.get(`${basePath}/api/health`, (req, res) => res.json({ ok: true }));
+}
+module.exports = { registerHealthGet };
+
+# backend/src/api/priority/getList.js
+/**
+ * GET /api/priority?section=<slug> -> [{id,name}] ordered by id ASC
+ */
+const { normalizeSlug, toMenuTable } = require("../../domain/sections/slug");
+
+async function handle(req, res, deps) {
+  const slug = normalizeSlug(req.query?.section);
+  if (!slug) return res.status(400).json({ error: "section is required" });
+
+  const table = toMenuTable(slug);
+
+  const [rows] = await deps.pool.query(
+    `SELECT id, name FROM \`${table}\` ORDER BY sort_order ASC, id ASC LIMIT 2000`
+  );
+  res.json(rows);
+}
+
+function registerPriorityListGet(app, deps) {
+  app.get("/api/priority", (req, res, next) =>
+    handle(req, res, deps).catch(next)
+  );
+}
+
+module.exports = { registerPriorityListGet };
+
+# backend/src/api/priority/postSave.js
+/**
+ * POST /api/priority { section, order: number[] }
+ * Reorders by swapping ids (permutes existing ids).
+ */
+const { normalizeSlug, toMenuTable } = require("../../domain/sections/slug");
+
+async function handle(req, res, deps) {
+  const section = normalizeSlug(req.body?.section);
+  if (!section) return res.status(400).json({ error: "section is required" });
+
+  const order = Array.isArray(req.body?.order) ? req.body.order : null;
+  if (!order || order.length === 0) return res.status(400).json({ error: "order is required" });
+
+  const table = toMenuTable(section);
+  const conn = await deps.pool.getConnection();
+
+  try {
+    await conn.beginTransaction();
+
+    const [existingRows] = await conn.query(
+      `SELECT id FROM \`${table}\` ORDER BY sort_order ASC, id ASC LIMIT 2000`
+    );
+    const existingIds = existingRows.map((r) => Number(r.id));
+
+    if (order.length !== existingIds.length) {
+      return res.status(400).json({ error: "order length mismatch" });
+    }
+
+    const exSet = new Set(existingIds);
+    const ord = order.map((x) => Number(x));
+    const ordSet = new Set(ord);
+
+    if (ordSet.size !== existingIds.length) {
+      return res.status(400).json({ error: "order must be unique permutation" });
+    }
+    for (const id of ordSet) {
+      if (!exSet.has(id)) return res.status(400).json({ error: "order contains unknown id" });
+    }
+
+    // полный пересчёт sort_order = 1..N в заданном порядке
+    for (let i = 0; i < ord.length; i++) {
+      await conn.query(`UPDATE \`${table}\` SET sort_order = ? WHERE id = ?`, [i + 1, ord[i]]);
+    }
+
+    await conn.commit();
+    res.json({ ok: true });
+  } catch (e) {
+    await conn.rollback();
+    throw e;
+  } finally {
+    conn.release();
+  }
+}
+
+function registerPrioritySavePost(app, deps) {
+  app.post("/api/priority", (req, res, next) =>
+    handle(req, res, deps).catch(next)
+  );
+}
+
+module.exports = { registerPrioritySavePost };
+
+# backend/src/api/sections/getList.js
+// backend/src/api/sections/getList.js
+/**
+ * GET /api/sections -> [{id,title,slug}]
+ */
+async function handle(req, res, deps) {
+  const [rows] = await deps.pool.query(
+    "SELECT id, title, slug FROM sections ORDER BY id ASC"
+  );
+  res.json(rows);
+}
+
+function registerSectionsListGet(app, deps, basePath = "") {
+  app.get(`${basePath}/api/sections`, (req, res, next) =>
+    handle(req, res, deps).catch(next)
+  );
+}
+
+module.exports = { registerSectionsListGet };
+
+# backend/src/api/sections/postCreate.js
+// backend/src/api/sections/postCreate.js
+/**
+ * POST /api/sections { title, slug? } -> created section
+ * Also creates the menu_<slug> table.
+ */
+const { normalizeSlug, toMenuTable } = require("../../domain/sections/slug");
+
+async function handle(req, res, deps) {
+  const title = String(req.body?.title || "").trim().slice(0, 120);
+  const slug = normalizeSlug(req.body?.slug || title);
+
+  if (!title) return res.status(400).json({ error: "title is required" });
+  if (!slug) return res.status(400).json({ error: "slug is invalid" });
+
+  await deps.pool.query("INSERT INTO sections (title, slug) VALUES (?, ?)", [
+    title,
+    slug,
+  ]);
+
+  const table = toMenuTable(slug);
+  await deps.pool.query(`
+    CREATE TABLE IF NOT EXISTS \`${table}\` (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      name VARCHAR(160) NOT NULL,
+      image_path VARCHAR(255) NOT NULL,
+      ingredients JSON NOT NULL,
+      choices JSON NOT NULL,
+      notes VARCHAR(2000) NOT NULL DEFAULT '',
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+
+  const [rows] = await deps.pool.query(
+    "SELECT id, title, slug FROM sections WHERE slug = ?",
+    [slug]
+  );
+  res.status(201).json(rows?.[0] || { title, slug });
+}
+
+function registerSectionsCreatePost(app, deps, basePath = "") {
+  app.post(`${basePath}/api/sections`, (req, res, next) =>
+    handle(req, res, deps).catch(next)
+  );
+}
+
+module.exports = { registerSectionsCreatePost };
+
+# backend/src/config/env.js
+// backend/src/config/env.js
+/**
+ * Environment reader (no .env dependency to keep docker-only).
+ */
+function loadEnv() {
+  const appPort = Number(process.env.APP_PORT || 3000);
+  const baseUrl = process.env.BASE_URL || "";
+  const uploadDir = process.env.UPLOAD_DIR || "/app/uploads";
+
+  return {
+    appPort,
+    baseUrl,
+    uploadDir,
+    db: {
+      host: process.env.DB_HOST || "127.0.0.1",
+      port: Number(process.env.DB_PORT || 3306),
+      user: process.env.DB_USER || "admin",
+      password: process.env.DB_PASSWORD || "admin",
+      database: process.env.DB_NAME || "restaurant",
+    },
+  };
+}
+
+module.exports = { loadEnv };
+
+# backend/src/domain/dishes/parseLines.js
+// backend/src/domain/dishes/parseLines.js
+/**
+ * Parse textarea lines into compact string array.
+ */
+function parseLines(text) {
+  return String(text || "")
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 100);
+}
+
+module.exports = { parseLines };
+
+# backend/src/domain/sections/slug.js
+// backend/src/domain/sections/slug.js
+/**
+ * Section slug normalization + validation (used as part of table name).
+ */
+function normalizeSlug(input) {
+  const raw = String(input || "").trim().toLowerCase();
+  const slug = raw
+    .replace(/\s+/g, "_")
+    .replace(/[^a-z0-9_]+/g, "")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 48);
+
+  if (!slug || !/^[a-z0-9_]+$/.test(slug)) return null;
+  return slug;
+}
+
+function toMenuTable(slug) {
+  return `menu_${slug}`;
+}
+
+module.exports = { normalizeSlug, toMenuTable };
+
+# backend/src/index.js
+// backend/src/index.js
+/**
+ * App entry: Express server + API registration + static frontend + uploads.
+ * Also exposes API+uploads under /vas-menu/* for Cloudflare Tunnel path routing.
+ */
+const path = require("path");
+const express = require("express");
+
+const { loadEnv } = require("./config/env");
+const { createPool } = require("./infra/db/pool");
+const { waitForDb } = require("./infra/db/waitForDb");
+const { ensureSchema } = require("./infra/db/schema");
+const { ensureUploadDir } = require("./infra/storage/uploadsStatic");
+const { errorMiddleware } = require("./infra/http/errorMiddleware");
+
+const { registerHealthGet } = require("./api/health/get");
+const { registerSectionsListGet } = require("./api/sections/getList");
+const { registerSectionsCreatePost } = require("./api/sections/postCreate");
+const { registerDishesListGet } = require("./api/dishes/getList");
+const { registerDishesCreatePost } = require("./api/dishes/postCreate");
+
+const { registerPriorityListGet } = require("./api/priority/getList");
+const { registerPrioritySavePost } = require("./api/priority/postSave");
+
+async function main() {
+  const env = loadEnv();
+
+  const app = express();
+  app.disable("x-powered-by");
+  app.use(express.json({ limit: "2mb" }));
+
+  const pool = createPool(env);
+  await waitForDb(pool);
+  await ensureSchema(pool);
+
+  await ensureUploadDir(env.uploadDir);
+
+  // uploads: доступны и в корне, и под /vas-menu
+  app.use("/uploads", express.static(env.uploadDir, { maxAge: "1h", etag: true }));
+  app.use("/vas-menu/uploads", express.static(env.uploadDir, { maxAge: "1h", etag: true }));
+
+  const deps = { env, pool };
+
+  // API router: монтируем и в корень, и под /vas-menu
+  const api = express.Router();
+  registerHealthGet(api, deps);
+  registerSectionsListGet(api, deps);
+  registerSectionsCreatePost(api, deps);
+  registerDishesListGet(api, deps);
+  registerDishesCreatePost(api, deps);
+
+  registerPriorityListGet(api, deps);
+  registerPrioritySavePost(api, deps);
+
+  app.use(api);
+  app.use("/vas-menu", api);
+
+  // Frontend
+  const frontendDir = path.join(process.cwd(), "frontend");
+  const indexHtml = path.join(frontendDir, "index.html");
+
+  app.use("/", express.static(frontendDir));
+  app.use("/vas-menu", express.static(frontendDir));
+  app.get("/vas-menu", (req, res) => res.sendFile(indexHtml));
+  app.get("/vas-menu/*", (req, res) => res.sendFile(indexHtml));
+
+  app.use(errorMiddleware);
+
+  app.listen(env.appPort, () => {
+    console.log(`Webapp: ${env.baseUrl || `http://localhost:${env.appPort}`}`);
+  });
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+
+# backend/src/infra/db/pool.js
+// backend/src/infra/db/pool.js
+/**
+ * MySQL pool factory.
+ */
+const mysql = require("mysql2/promise");
+
+function createPool(env) {
+  return mysql.createPool({
+    host: env.db.host,
+    port: env.db.port,
+    user: env.db.user,
+    password: env.db.password,
+    database: env.db.database,
+    waitForConnections: true,
+    connectionLimit: 10,
+    namedPlaceholders: true,
+    timezone: "Z",
+  });
+}
+
+module.exports = { createPool };
+
+# backend/src/infra/db/schema.js
+/**
+ * DB schema bootstrap + migrations for menu_* tables (notes + sort_order).
+ */
+const { toMenuTable } = require("../../domain/sections/slug");
+
+async function ensureSchema(pool) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sections (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      title VARCHAR(120) NOT NULL,
+      slug VARCHAR(64) NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_sections_slug (slug)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+
+  const [[c]] = await pool.query("SELECT COUNT(*) AS cnt FROM sections");
+  if (Number(c?.cnt || 0) === 0) {
+    await pool.query(
+      "INSERT INTO sections (title, slug) VALUES (?, ?), (?, ?), (?, ?), (?, ?)",
+      ["Закуски", "snacks", "Салаты", "salads", "Горячие блюда", "mains", "Десерты", "desserts"]
+    );
+  }
+
+  const [sections] = await pool.query("SELECT slug FROM sections ORDER BY id ASC");
+  for (const s of sections) {
+    const table = toMenuTable(s.slug);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS \`${table}\` (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        name VARCHAR(160) NOT NULL,
+        image_path VARCHAR(255) NOT NULL,
+        ingredients JSON NOT NULL,
+        choices JSON NOT NULL,
+        notes VARCHAR(2000) NOT NULL DEFAULT '',
+        sort_order INT UNSIGNED NOT NULL DEFAULT 0,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    await ensureColumn(pool, table, "notes", "VARCHAR(2000) NOT NULL DEFAULT ''");
+    const addedSort = await ensureColumn(pool, table, "sort_order", "INT UNSIGNED NOT NULL DEFAULT 0");
+
+    if (addedSort || (await isSortOrderAllZero(pool, table))) {
+      await initSortOrder(pool, table);
+    }
+  }
+}
+
+async function ensureColumn(pool, table, column, ddl) {
+  const [rows] = await pool.query(
+    `SELECT 1
+     FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = ?
+       AND COLUMN_NAME = ?
+     LIMIT 1`,
+    [table, column]
+  );
+
+  if (rows.length) return false;
+  await pool.query(`ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` ${ddl}`);
+  return true;
+}
+
+async function isSortOrderAllZero(pool, table) {
+  const [[r]] = await pool.query(
+    `SELECT COUNT(*) AS cnt,
+            SUM(CASE WHEN sort_order = 0 THEN 1 ELSE 0 END) AS zeros
+     FROM \`${table}\``
+  );
+
+  const cnt = Number(r?.cnt || 0);
+  const zeros = Number(r?.zeros || 0);
+  return cnt > 0 && zeros === cnt;
+}
+
+async function initSortOrder(pool, table) {
+  await pool.query(
+    `UPDATE \`${table}\` t
+     JOIN (
+       SELECT id, ROW_NUMBER() OVER (ORDER BY id ASC) AS rn
+       FROM \`${table}\`
+     ) x ON x.id = t.id
+     SET t.sort_order = x.rn`
+  );
+}
+
+module.exports = { ensureSchema };
+
+# backend/src/infra/db/waitForDb.js
+// backend/src/infra/db/waitForDb.js
+/**
+ * Startup wait: ping DB with retries (fast fail if misconfigured).
+ */
+async function waitForDb(pool) {
+  const startedAt = Date.now();
+  const maxMs = 45_000;
+
+  while (true) {
+    try {
+      await pool.query("SELECT 1");
+      return;
+    } catch (e) {
+      if (Date.now() - startedAt > maxMs) throw e;
+      await new Promise((r) => setTimeout(r, 800));
+    }
+  }
+}
+
+module.exports = { waitForDb };
+
+# backend/src/infra/http/errorMiddleware.js
+// backend/src/infra/http/errorMiddleware.js
+/**
+ * Express error middleware (JSON).
+ */
+function errorMiddleware(err, req, res, next) {
+  const msg = err?.message || "server error";
+  const status = /duplicate|ER_DUP_ENTRY/i.test(msg) ? 409 : 500;
+  console.error(err);
+  res.status(status).json({ error: msg });
+}
+
+module.exports = { errorMiddleware };
+
+# backend/src/infra/storage/imageUpload.js
+// backend/src/infra/storage/imageUpload.js
+/**
+ * Multer middleware for dish images.
+ */
+const multer = require("multer");
+const path = require("path");
+const { buildStoredFilename } = require("./uploadsStatic");
+
+function createImageUpload(uploadDir) {
+  const storage = multer.diskStorage({
+    destination: uploadDir,
+    filename: (req, file, cb) => cb(null, buildStoredFilename(file.originalname)),
+  });
+
+  const fileFilter = (req, file, cb) => {
+    const ok = /^image\//.test(file.mimetype);
+    cb(ok ? null : new Error("Only image uploads are allowed"), ok);
+  };
+
+  return multer({
+    storage,
+    fileFilter,
+    limits: { fileSize: 8 * 1024 * 1024 },
+  });
+}
+
+module.exports = { createImageUpload };
+
+# backend/src/infra/storage/uploadsStatic.js
+// backend/src/infra/storage/uploadsStatic.js
+/**
+ * Uploads directory bootstrap + express static mount.
+ */
+const express = require("express");
+const fs = require("fs/promises");
+const path = require("path");
+
+async function ensureUploadDir(uploadDir) {
+  await fs.mkdir(uploadDir, { recursive: true });
+}
+
+function mountUploadsStatic(app, uploadDir, basePath = "") {
+  const p = `${basePath}/uploads`;
+  app.use(p, express.static(uploadDir, { maxAge: "1h", etag: true }));
+}
+
+function buildStoredFilename(originalName) {
+  const ts = Date.now();
+  const safeBase = path
+    .basename(originalName)
+    .replace(/[^a-zA-Z0-9._-]+/g, "_")
+    .slice(0, 80);
+
+  return `${ts}_${safeBase}`;
+}
+
+module.exports = { ensureUploadDir, mountUploadsStatic, buildStoredFilename };
+
 # docker-compose.yml
 # Restaurant menu trainer: Node.js + MySQL 8.4 + phpMyAdmin.
 services:
@@ -247,7 +906,7 @@ function renderCards(cards) {
     }
 
     const meta = document.createElement("div");
-    meta.className = "card__meta";
+    meta.className = "card__meta hide";
     meta.textContent = `#${d.id}`;
 
     body.appendChild(nameRow);
@@ -264,8 +923,7 @@ function renderCards(cards) {
       wrap.innerHTML = `
         <div class="card__meta" style="margin-top:8px;">Ингредиенты</div>
         ${renderUl(d.ingredients)}
-        <div class="card__meta" style="margin-top:8px;">На выбор</div>
-        ${renderUl(d.choices)}
+        ${renderChoicesBlock(d.choices)}
       `;
 
       details.appendChild(summary);
@@ -276,8 +934,7 @@ function renderCards(cards) {
       wrap.innerHTML = `
         <div class="card__meta" style="margin-top:8px;">Ингредиенты</div>
         ${renderUl(d.ingredients)}
-        <div class="card__meta" style="margin-top:8px;">На выбор</div>
-        ${renderUl(d.choices)}
+        ${renderChoicesBlock(d.choices)}
       `;
       body.appendChild(wrap);
     }
@@ -301,8 +958,18 @@ function renderCards(cards) {
 
 function renderUl(items) {
   const list = Array.isArray(items) ? items : [];
-  if (list.length === 0) return `<div class="card__meta">—</div>`;
+  if (list.length === 0) return `<div class="card__meta hide">—</div>`;
   return `<ul class="card__list">${list.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>`;
+}
+
+// добавь рядом с renderUl (выше/ниже — не важно)
+function renderChoicesBlock(items) {
+  const list = Array.isArray(items) ? items : [];
+  if (list.length === 0) return "";
+  return `
+    <div class="card__meta" style="margin-top:8px;">На выбор</div>
+    ${renderUl(list)}
+  `;
 }
 
 function escapeHtml(s) {
@@ -313,13 +980,6 @@ function escapeHtml(s) {
     '"': "&quot;",
     "'": "&#39;",
   }[c]));
-}
-
-/** allow closing modal by clicking backdrop */
-function enableBackdropClose(dlg) {
-  dlg.addEventListener("click", (ev) => {
-    if (ev.target === dlg) dlg.close();
-  });
 }
 
 /** detect “cancel/close” submit buttons inside forms */
@@ -448,9 +1108,14 @@ async function boot() {
   $("btnAddDish").onclick = openAddDish;
   $("btnSettings").onclick = openSettings;
 
-  // make add-dish dialog always closable
-  enableBackdropClose($("dlgAddDish"));
-  $("dlgAddDish").addEventListener("close", () => {
+  // add-dish: close ONLY via "Закрыть" button (no backdrop click, no Esc)
+  const dlgAddDish = $("dlgAddDish");
+
+  dlgAddDish.addEventListener("cancel", (ev) => {
+    ev.preventDefault(); // disables Esc to close
+  });
+
+  dlgAddDish.addEventListener("close", () => {
     $("dishMsg").textContent = "";
   });
 
@@ -560,12 +1225,15 @@ function renderPriority() {
 
     li.innerHTML = `
       <div class="prio__row">
-        <div>${escapeHtml(it.name)}</div>
+        <div class="prio__left">
+          <button type="button" class="prio__handle" aria-label="Перетащить" title="Перетащить"></button>
+          <div class="prio__name">${escapeHtml(it.name)}</div>
+        </div>
         <div class="prio__id">#${it.id}</div>
       </div>
     `;
 
-    li.addEventListener("pointerdown", onPrioPointerDown);
+    li.querySelector(".prio__handle")?.addEventListener("pointerdown", onPrioPointerDown);
 
     ul.appendChild(li);
   });
@@ -574,11 +1242,15 @@ function renderPriority() {
 function onPrioPointerDown(ev) {
   if (ev.button != null && ev.button !== 0) return;
 
-  const li = ev.currentTarget;
-  const ul = li.parentElement;
-  if (!ul || state.prioDrag) return;
+  const handle = ev.currentTarget;
+  if (!handle?.classList?.contains("prio__handle")) return;
+
+  const li = handle.closest(".prio__item");
+  const ul = li?.parentElement;
+  if (!li || !ul || state.prioDrag) return;
 
   ev.preventDefault();
+  ev.stopPropagation();
 
   const id = Number(li.dataset.id);
   const fromIndex = state.priorityItems.findIndex((x) => x.id === id);
@@ -926,7 +1598,7 @@ textarea{ resize:vertical; }
 
 summary { cursor: pointer; width: max-content;
     border: 1px solid #343c47;
-    padding: 7px 10px;
+    padding: 3px 9px 6px 9px;
     border-radius: 12px;}
 
 .check{ display:flex; gap:10px; align-items:center; padding:10px; border:1px solid var(--line); border-radius:12px; background:#0b1220; }
@@ -936,10 +1608,6 @@ summary { cursor: pointer; width: max-content;
 .dialog--fullscreen .fs{ position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center; padding:12px; }
 .fs__img{ max-width:100%; max-height:100%; object-fit: contain; border-radius:12px; border:1px solid var(--line); background:#000; }
 .fs__close{ position:absolute; top:10px; right:10px; }
-
-.card__meta {
-  display: none;
-}
 
 .prio{
   list-style:none;
@@ -958,9 +1626,8 @@ summary { cursor: pointer; width: max-content;
   border-radius:12px;
   border:1px solid var(--line);
   background:#0b1220;
-  cursor:grab;
-  user-select:none;
-  touch-action:none;
+  cursor:default;
+  user-select:text;
   transition: transform 140ms ease;
 }
 
@@ -969,6 +1636,41 @@ summary { cursor: pointer; width: max-content;
 }
 
 .prio__row{ display:flex; justify-content:space-between; align-items:center; gap:10px; }
+.prio__left{ display:flex; align-items:center; gap:10px; min-width: 0; }
+.prio__name{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+.prio__handle{
+  appearance:none;
+  border:1px solid var(--line);
+  background:transparent;
+  color: var(--muted);
+  width:32px;
+  height:32px;
+  border-radius:12px;
+  display:grid;
+  place-items:center;
+  padding:0;
+  cursor:grab;
+  user-select:none;
+  touch-action:none;
+}
+.prio__handle::before{
+  content:"";
+  width:14px;
+  height:12px;
+  margin: 0 8px;
+  background:
+    linear-gradient(currentColor 0 0) 0 0/14px 2px no-repeat,
+    linear-gradient(currentColor 0 0) 0 5px/14px 2px no-repeat,
+    linear-gradient(currentColor 0 0) 0 10px/14px 2px no-repeat;
+  opacity:.9;
+}
+.prio__handle:active{ cursor:grabbing; }
+.prio__handle:focus-visible{
+  outline: 2px solid rgba(96,165,250,.45);
+  outline-offset: 2px;
+}
+
 .prio__id{ color:var(--muted); font-size:12px; }
 
 .prio__placeholder{

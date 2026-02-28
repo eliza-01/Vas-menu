@@ -1,7 +1,7 @@
 ﻿// backend/src/api/dishes/postCreate.js
 /**
  * POST /api/dishes (multipart/form-data)
- * Fields: section, name, ingredients, choices, notes, image
+ * Fields: section, name, ingredients, decor, choices, notes, image
  */
 const path = require("path");
 const { createImageUpload } = require("../../infra/storage/imageUpload");
@@ -18,6 +18,7 @@ async function handle(req, res, deps) {
   if (!req.file) return res.status(400).json({ error: "image is required" });
 
   const ingredients = parseLines(req.body?.ingredients);
+  const decor = parseLines(req.body?.decor);
   const choices = parseLines(req.body?.choices);
   const notes = String(req.body?.notes || "").trim().slice(0, 2000);
 
@@ -29,12 +30,13 @@ async function handle(req, res, deps) {
   const sortOrder = Number(m?.mx || 0) + 1;
 
   await deps.pool.query(
-    `INSERT INTO \`${table}\` (name, image_path, ingredients, choices, notes, sort_order)
-     VALUES (?, ?, CAST(? AS JSON), CAST(? AS JSON), ?, ?)`,
+    `INSERT INTO \`${table}\` (name, image_path, ingredients, decor, choices, notes, sort_order)
+     VALUES (?, ?, CAST(? AS JSON), CAST(? AS JSON), CAST(? AS JSON), ?, ?)`,
     [
       name,
       path.basename(req.file.filename),
       JSON.stringify(ingredients),
+      JSON.stringify(decor),
       JSON.stringify(choices),
       notes,
       sortOrder,
