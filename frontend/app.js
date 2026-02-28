@@ -228,13 +228,6 @@ function escapeHtml(s) {
   }[c]));
 }
 
-/** allow closing modal by clicking backdrop */
-function enableBackdropClose(dlg) {
-  dlg.addEventListener("click", (ev) => {
-    if (ev.target === dlg) dlg.close();
-  });
-}
-
 /** detect “cancel/close” submit buttons inside forms */
 function isCancelSubmitter(btn) {
   if (!btn) return false;
@@ -361,9 +354,14 @@ async function boot() {
   $("btnAddDish").onclick = openAddDish;
   $("btnSettings").onclick = openSettings;
 
-  // make add-dish dialog always closable
-  enableBackdropClose($("dlgAddDish"));
-  $("dlgAddDish").addEventListener("close", () => {
+  // add-dish: close ONLY via "Закрыть" button (no backdrop click, no Esc)
+  const dlgAddDish = $("dlgAddDish");
+
+  dlgAddDish.addEventListener("cancel", (ev) => {
+    ev.preventDefault(); // disables Esc to close
+  });
+
+  dlgAddDish.addEventListener("close", () => {
     $("dishMsg").textContent = "";
   });
 
